@@ -1,0 +1,45 @@
+# Copyright (C) 2026 The LineageOS Project
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# TWRP/OrangeFox recovery fstab — UMIDIGI G7 Tab Pro (mt6789)
+#
+# Cross-checked against the device's real fstab.mt6789 (init fstab). Notes:
+#   - boot/dtbo/vendor_boot are UNSUFFIXED in the real fstab — slot
+#     resolution happens via the "slotselect" flag, not a literal _a/_b
+#     path. Matches that convention here.
+#   - No /recovery partition exists — boot-as-recovery model.
+#   - No /cache partition exists.
+#   - No init_boot entry appears in the real fstab even though the
+#     partition exists in the scatter file — boot.img still carries a
+#     full ramdisk itself. Treat as boot-image responsibility, not a
+#     separate mount, unless you find contrary evidence.
+#   - system/vendor/product/vendor_dlkm/odm_dlkm are logical partitions
+#     inside "super" (dynamic partitions) — mounted via device-mapper.
+#
+# <mount point> <fstype> <device> [<device2>] [<flags>]
+
+/boot           emmc    /dev/block/by-name/boot
+/dtbo           emmc    /dev/block/by-name/dtbo
+/vendor_boot    emmc    /dev/block/by-name/vendor_boot
+
+/system         ext4    /dev/block/mapper/system
+/vendor         ext4    /dev/block/mapper/vendor
+/product        ext4    /dev/block/mapper/product
+/vendor_dlkm    ext4    /dev/block/mapper/vendor_dlkm
+/odm_dlkm       ext4    /dev/block/mapper/odm_dlkm
+
+/metadata       ext4    /dev/block/by-name/metadata
+/data           f2fs    /dev/block/by-name/userdata     flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized;fbe;forceencrypt
+/misc           emmc    /dev/block/by-name/misc
+/frp            emmc    /dev/block/by-name/frp
+/persist        ext4    /dev/block/by-name/persist       flags=display="Persist"
+/mnt/vendor/nvdata    ext4    /dev/block/by-name/nvdata        flags=display="NVData"
+/mnt/vendor/nvcfg     ext4    /dev/block/by-name/nvcfg         flags=display="NVConfig"
+/mnt/vendor/protect_f ext4    /dev/block/by-name/protect1      flags=display="Protect1"
+/mnt/vendor/protect_s ext4    /dev/block/by-name/protect2      flags=display="Protect2"
+/mnt/zlintek          ext4    /dev/block/by-name/zlintek       flags=display="Zlintek"
+
+# External storage
+/external_sd    vfat    /dev/block/mmcblk1p1  /dev/block/mmcblk1     flags=display="MicroSD";storage;wipeingui;removable
+/usb-otg        vfat    /dev/block/sda1        /dev/block/sda1        flags=display="USB-OTG";storage;wipeingui;removable
