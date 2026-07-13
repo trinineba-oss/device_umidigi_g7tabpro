@@ -141,7 +141,6 @@ AB_OTA_PARTITIONS := \
 # Recovery — CONFIRMED: no physical /recovery partition exists in the
 # scatter file. This device boots recovery mode via a ramdisk toggle in
 # boot.img (classic "recovery as boot"), not a dedicated recovery image.
-BOARD_USES_RECOVERY_AS_BOOT := true
 # Using the real init fstab directly, matching the donor tree's convention
 # (device_xiaomi_rock does the same) rather than a hand-adapted TWRP-style
 # recovery.fstab — this is your actual uploaded fstab.mt6789, verbatim.
