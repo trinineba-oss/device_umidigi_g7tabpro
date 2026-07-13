@@ -33,7 +33,7 @@ TARGET_BOOTLOADER_BOARD_NAME := mt6789
 # vendor_boot.img/dtbo.img instead. Trade-off: no kernel patches (no
 # KernelSU, no bug fixes) until/unless UMIDIGI provides source on request.
 TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/Image.gz
-TARGET_PREBUILT_DTB := $(DEVICE_PATH)/prebuilt/dtb.img
+BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt/dtb
 TARGET_PREBUILT_DTBO := $(DEVICE_PATH)/prebuilt/dtbo.img
 TARGET_KERNEL_ARCH := arm64
 BOARD_KERNEL_IMAGE_NAME := Image.gz
