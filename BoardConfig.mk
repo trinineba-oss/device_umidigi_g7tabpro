@@ -21,6 +21,9 @@ TARGET_2ND_CPU_ABI2 := armeabi
 TARGET_2ND_CPU_VARIANT := cortex-a55
 TARGET_2ND_CPU_VARIANT_RUNTIME := cortex-a55
 
+# Required explicitly on newer board_config.mk
+TARGET_SUPPORTS_64_BIT_APPS := true
+
 TARGET_BOARD_PLATFORM := mt6789         # CONFIRMED — ro.board.platform in build.prop
 TARGET_BOOTLOADER_BOARD_NAME := mt6789
 
