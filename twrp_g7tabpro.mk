@@ -2,20 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Product makefile for TWRP builds specifically, targeting the twrp-12.1
-# minimal manifest (github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp),
-# which is current for Android 10+ devices including this Android 13 one.
-# Deliberately standalone — does NOT inherit device.mk (that pulls in
-# full ROM-side HAL packages/vendor blobs that don't exist in the TWRP
-# minimal source tree and aren't needed to build a recovery ramdisk).
+# Inherit chain matches real, currently-building twrp-12.1 device trees
+# (miatoll, denver, samsung a15 — also Helio G99/MT6789). The minimal
+# manifest's build/make is trimmed vs full AOSP; core_64_bit.mk +
+# embedded.mk don't both exist in it. full_base_telephony.mk does.
+#
+# Deliberately does NOT inherit device.mk — that's for the full ROM
+# build and needs extract-files.sh run first.
+$(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)
 
-# Inherit base product config
-$(call inherit-product, $(SRC_TARGET_DIR)/product/embedded.mk)
-$(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
-
-# Inherit TWRP's common product config — provides default TWRP packages,
-# binaries, and build rules. Confirm this path exists after repo sync;
-# minimal-manifest-twrp has occasionally moved it between branches.
+# Inherit some common TWRP stuff.
 $(call inherit-product, vendor/twrp/config/common.mk)
 
 PRODUCT_NAME := twrp_g7tabpro
