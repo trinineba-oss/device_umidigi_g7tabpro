@@ -21,3 +21,7 @@ PRODUCT_MODEL := G7 Tab Pro
 PRODUCT_MANUFACTURER := UMIDIGI
 
 BOARD_VENDOR := umidigi
+
+# Fix: first_stage_ramdisk was empty - copy fstab in explicitly
+PRODUCT_COPY_FILES += \
+    device/umidigi/g7tabpro/rootdir/etc/fstab.mt6789:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/fstab.mt6789
