@@ -21,7 +21,9 @@ TARGET_2ND_CPU_ABI2 := armeabi
 TARGET_2ND_CPU_VARIANT := cortex-a55
 TARGET_2ND_CPU_VARIANT_RUNTIME := cortex-a55
 
-# Required explicitly on newer board_config.mk
+# Required explicitly — newer board_config.mk hard-errors if neither this
+# nor TARGET_SUPPORTS_32_BIT_APPS is set on a 64-bit TARGET_ARCH, instead
+# of just warning like older AOSP versions did.
 TARGET_SUPPORTS_64_BIT_APPS := true
 
 TARGET_BOARD_PLATFORM := mt6789         # CONFIRMED — ro.board.platform in build.prop
@@ -32,7 +34,18 @@ TARGET_BOOTLOADER_BOARD_NAME := mt6789
 # Using the real stock prebuilt images extracted from your boot.img/
 # vendor_boot.img/dtbo.img instead. Trade-off: no kernel patches (no
 # KernelSU, no bug fixes) until/unless UMIDIGI provides source on request.
-TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/Image.gz
+# TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/Image.gz
+# ^ commented out: TARGET_NO_KERNEL := true below makes this inert for
+# the vendorbootimage build target (vendor_boot never contains a kernel).
+# Keep prebuilt/Image.gz on disk regardless — needed if a full ROM build
+# is attempted later.
+BOARD_DTB_SIZE := 182269
+# BOARD_PREBUILT_DTBIMAGE_DIR, not TARGET_PREBUILT_DTB — the latter is the
+# older single-file convention and produces no ninja rule to build dtb.img
+# when BOARD_USES_GENERIC_KERNEL_IMAGE is set (confirmed by an actual
+# "missing and no known rule to make it" build failure). This directory
+# form is what actually generates that rule; all .dtb files inside it get
+# concatenated into dtb.img.
 BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt/dtb
 TARGET_PREBUILT_DTBO := $(DEVICE_PATH)/prebuilt/dtbo.img
 TARGET_KERNEL_ARCH := arm64
@@ -81,6 +94,68 @@ BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(addprefix $(DEVICE_PATH)/prebuilt/modul
 BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD := $(strip $(shell cat $(DEVICE_PATH)/prebuilt/modules/modules.load.recovery))
 RECOVERY_MODULES := $(addprefix $(DEVICE_PATH)/prebuilt/modules/, $(BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD))
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(sort $(BOARD_VENDOR_RAMDISK_KERNEL_MODULES) $(RECOVERY_MODULES))
+# TWRP needs to be explicitly told to actually load these at runtime —
+# building them into the ramdisk alone isn't enough.
+TW_LOAD_VENDOR_BOOT_MODULES := true
+
+# --- Everything below CONFIRMED against a real, production, currently-
+# working common tree for this exact SoC:
+# github.com/transsion-mt6789-recovery/twrp-device_transsion_mt6789-common
+# (used by TECNO POVA 6 / LI7, same MT6789 + Mali-G57 MC2, confirmed
+# working Display+Decryption on OrangeFox). These are gaps our tree had
+# that theirs doesn't — folding them in wholesale rather than guessing
+# which one specifically matters.
+
+# vendor_boot never contains a kernel at all (confirmed by AOSP's own
+# boot image format spec) — TARGET_PREBUILT_KERNEL above was likely
+# inert for the vendorbootimage build target specifically.
+TARGET_NO_KERNEL := true
+TARGET_NO_RECOVERY := true
+
+# Recovery ramdisk fragment tagging inside vendor_boot's ramdisk table —
+# we never had this. Without it the recovery content may not be marked
+# as something the bootloader should load when booting into recovery.
+BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
+
+BOARD_AVB_ENABLE := true
+BOARD_USES_METADATA_PARTITION := true
+
+# vendor_boot's own cmdline field, separate from BOARD_KERNEL_CMDLINE
+BOARD_VENDOR_BASE := 0x3fff8000
+BOARD_VENDOR_CMDLINE := bootopt=64S3,32N2,64N2
+BOARD_MKBOOTIMG_ARGS += --vendor_cmdline $(BOARD_VENDOR_CMDLINE)
+BOARD_MKBOOTIMG_ARGS += --board ""
+
+# Anti-rollback hack: pins security patch/version to absurdly future
+# values so TEE/RPMB-level downgrade rejection doesn't kick in — this
+# operates independently of the vbmeta verification flags, so disabling
+# vbmeta verification alone doesn't cover it.
+PLATFORM_SECURITY_PATCH := 2099-12-31
+PLATFORM_VERSION := 99.87.36
+PLATFORM_VERSION_LAST_STABLE := $(PLATFORM_VERSION)
+VENDOR_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
+BOOT_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
+
+# Build compatibility hacks
+BUILD_BROKEN_DUP_RULES := true
+BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+ALLOW_MISSING_DEPENDENCIES := true
+
+# TWRP hardening flags proven for this platform
+BOARD_HAS_LARGE_FILESYSTEM := true
+BOARD_HAS_NO_SELECT_BUTTON := true
+BOARD_SUPPRESS_SECURE_ERASE := true
+TW_USE_FSCRYPT_POLICY := 2
+TW_FORCE_KEYMASTER_VER := true
+
+# Explicit partition-to-group mapping for dynamic partitions — we had
+# the group size but never declared which partitions belong to it.
+BOARD_MAIN_GROUP_PARTITION_LIST += \
+    odm_dlkm \
+    product \
+    system \
+    vendor \
+    vendor_dlkm
 
 # --- Partitions — CONFIRMED sizes from scatter file (identical in both the
 # EMMC and UFS sections of the scatter file, so accurate regardless of which
@@ -100,10 +175,21 @@ TARGET_USES_DYNAMIC_PARTITIONS := true
 BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
+# Anticipating the same board_config.mk check that just caught
+# BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE — vendor_dlkm/odm_dlkm were set as
+# separate TARGET_COPY_OUT_* in the same batch, so they likely need this too.
 BOARD_VENDOR_DLKMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_ODM_DLKMIMAGE_FILE_SYSTEM_TYPE := ext4
 
-# Fix for: could not make way for new symlink: root/vendor
+# CONFIRMED fix for a real build failure: "could not make way for new
+# symlink: root/vendor / cannot delete non-empty directory: root/vendor".
+# Without these set explicitly, the build system defaults to treating
+# /vendor (and friends) as merged under /system, which means it expects
+# root/vendor to be a SYMLINK. But this device has vendor/product/
+# vendor_dlkm/odm_dlkm as genuinely separate partitions (confirmed
+# repeatedly via the scatter file and real fstab.mt6789), and
+# BOARD_VENDOR_RAMDISK_KERNEL_MODULES installs real files into a real
+# vendor/ directory tree — hence the symlink-vs-populated-directory clash.
 TARGET_COPY_OUT_VENDOR := vendor
 TARGET_COPY_OUT_PRODUCT := product
 TARGET_COPY_OUT_VENDOR_DLKM := vendor_dlkm
@@ -149,9 +235,11 @@ AB_OTA_PARTITIONS := \
 # Recovery — CONFIRMED: no physical /recovery partition exists in the
 # scatter file. This device boots recovery mode via a ramdisk toggle in
 # boot.img (classic "recovery as boot"), not a dedicated recovery image.
-# Using the real init fstab directly, matching the donor tree's convention
-# (device_xiaomi_rock does the same) rather than a hand-adapted TWRP-style
-# recovery.fstab — this is your actual uploaded fstab.mt6789, verbatim.
+# NOTE: BOARD_USES_RECOVERY_AS_BOOT removed — it's mutually exclusive
+# with BOARD_USES_GENERIC_KERNEL_IMAGE (set above, near the kernel
+# section). BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT is the correct
+# mechanism for a GKI device like this one; the build system errors if
+# both are set.
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/rootdir/etc/fstab.mt6789
 TW_THEME := portrait_hdpi
 TW_INCLUDE_CRYPTO := true
