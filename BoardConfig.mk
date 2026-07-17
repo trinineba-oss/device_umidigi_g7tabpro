@@ -261,3 +261,4 @@ TW_SCREEN_WIDTH := 1200
 TW_SCREEN_HEIGHT := 1920
 
 -include vendor/umidigi/g7tabpro/BoardConfigVendor.mk
+$(call inherit-product, vendor/umidigi/g7tab/device-vendor.mk)
