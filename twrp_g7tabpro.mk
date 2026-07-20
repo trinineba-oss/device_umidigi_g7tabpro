@@ -40,7 +40,7 @@ BOARD_VENDOR := umidigi
 # pattern for GKI/no-recovery-partition devices:
 # https://source.android.com/docs/core/architecture/partitions/generic-boot
 PRODUCT_COPY_FILES += \
-    device/umidigi/g7tabpro/rootdir/etc/fstab.mt6789:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/fstab.mt6789
+    device/umidigi/g7tabpro/rootdir/etc/fstab.mt6789:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/fstab.mt6789
 
 # These early-boot binaries (e2fsck, linker64, snapuserd + shared libs,
 # AVB GSI pubkeys) aren't something we can build from source in the TWRP
@@ -50,24 +50,24 @@ PRODUCT_COPY_FILES += \
 # allows copying raw prebuilt ELF binaries this way without the build
 # system rejecting them for missing build-time dependency info.
 PRODUCT_COPY_FILES += \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/avb/q-gsi.avbpubkey:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/avb/q-gsi.avbpubkey \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/avb/r-gsi.avbpubkey:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/avb/r-gsi.avbpubkey \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/avb/s-gsi.avbpubkey:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/avb/s-gsi.avbpubkey \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/bin/e2fsck:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/bin/e2fsck \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/bin/linker64:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/bin/linker64 \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/bin/snapuserd:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/bin/snapuserd \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/ld-android.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/ld-android.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libbase.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libbase.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libc++.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libc++.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libc.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libc.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libdl.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libdl.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_blkid.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libext2_blkid.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_com_err.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libext2_com_err.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_e2p.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libext2_e2p.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_quota.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libext2_quota.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_uuid.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libext2_uuid.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2fs.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libext2fs.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/liblog.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/liblog.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libm.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libm.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libsparse.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libsparse.so \
-    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libz.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libz.so
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/avb/q-gsi.avbpubkey:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/avb/q-gsi.avbpubkey \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/avb/r-gsi.avbpubkey:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/avb/r-gsi.avbpubkey \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/avb/s-gsi.avbpubkey:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/avb/s-gsi.avbpubkey \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/bin/e2fsck:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/bin/e2fsck \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/bin/linker64:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/bin/linker64 \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/bin/snapuserd:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/bin/snapuserd \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/ld-android.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/ld-android.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libbase.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libbase.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libc++.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libc++.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libc.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libc.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libdl.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libdl.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_blkid.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libext2_blkid.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_com_err.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libext2_com_err.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_e2p.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libext2_e2p.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_quota.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libext2_quota.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2_uuid.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libext2_uuid.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libext2fs.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libext2fs.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/liblog.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/liblog.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libm.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libm.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libsparse.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libsparse.so \
+    device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libz.so:$(TARGET_RECOVERY_ROOT_OUT)/first_stage_ramdisk/system/lib64/libz.so
