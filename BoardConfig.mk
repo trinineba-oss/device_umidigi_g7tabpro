@@ -89,11 +89,27 @@ BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
 # modules.load / modules.load.recovery / modules.dep. These are extracted
 # into prebuilt/modules/ already. Without wiring these in, the prebuilt
 # kernel alone boots but most peripherals silently don't work.
+# All .ko files are placed into the vendor ramdisk once (the physical set
+# of module files). The two *_LOAD lists then control *when* each loads:
+#   _KERNEL_MODULES_LOAD          -> loaded in first-stage init on NORMAL boot
+#   _RECOVERY_KERNEL_MODULES_LOAD -> loaded only when recovery/fastbootd is
+#                                    selected from the ramdisk
+#
+# IMPORTANT (this was a real bug in earlier revisions): the previous version
+# merged modules.load.recovery INTO the main first-stage list, which
+# force-loaded all ~175 modules — including 19 recovery-only ones — during
+# first-stage init on every normal boot. AOSP explicitly warns against this
+# ("don't load the recovery mode modules in first stage init during normal
+# boot flow"), and it's a plausible cause of a silent early-boot hang. The
+# two load lists are kept strictly separate below.
+#
+# The full physical module set = union of both load lists (so every .ko that
+# either list references actually exists in the ramdisk), but the LOAD lists
+# themselves stay distinct.
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD := $(strip $(shell cat $(DEVICE_PATH)/prebuilt/modules/modules.load))
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(addprefix $(DEVICE_PATH)/prebuilt/modules/, $(BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD))
 BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD := $(strip $(shell cat $(DEVICE_PATH)/prebuilt/modules/modules.load.recovery))
-RECOVERY_MODULES := $(addprefix $(DEVICE_PATH)/prebuilt/modules/, $(BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD))
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(sort $(BOARD_VENDOR_RAMDISK_KERNEL_MODULES) $(RECOVERY_MODULES))
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES := $(addprefix $(DEVICE_PATH)/prebuilt/modules/, \
+    $(sort $(BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD) $(BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD)))
 # TWRP needs to be explicitly told to actually load these at runtime —
 # building them into the ramdisk alone isn't enough.
 TW_LOAD_VENDOR_BOOT_MODULES := true
