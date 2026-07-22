@@ -141,6 +141,7 @@ BOARD_AVB_ENABLE := true
 # partitions can be remounted rw (adb remount) after flashing.
 BOARD_AVB_MAKE_VBMETA_IMAGE_ARGS += --flags 2
 BOARD_AVB_VBMETA_SYSTEM_MAKE_VBMETA_IMAGE_ARGS += --flags 2
+BOARD_AVB_VBMETA_VENDOR_MAKE_VBMETA_IMAGE_ARGS += --flags 2
 BOARD_USES_METADATA_PARTITION := true
 
 # vendor_boot's own cmdline field, separate from BOARD_KERNEL_CMDLINE
