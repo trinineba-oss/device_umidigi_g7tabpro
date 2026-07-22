@@ -61,6 +61,7 @@ mtk-mml.ko
 mtk_panel_ext.ko
 it6112_i2c.ko
 panel-dk068h5gq-dsi-vdo.ko
+tddi_9551.ko
 panel-l0a9w006c-dsi-vdo.ko
 mediatek-drm.ko
 aee_rs.ko
