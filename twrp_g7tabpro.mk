@@ -75,3 +75,18 @@ PRODUCT_COPY_FILES += \
     device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libm.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libm.so \
     device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libsparse.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libsparse.so \
     device/umidigi/g7tabpro/prebuilt/first_stage_ramdisk/system/lib64/libz.so:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/system/lib64/libz.so
+
+# ROOT CAUSE FIX for the "boot hang":
+# The recovery binary was dying instantly at the dynamic linker stage:
+#   CANNOT LINK EXECUTABLE "/system/bin/recovery":
+#   library "libresetprop.so" not found: needed by main executable
+# init then restarted it every 5 seconds forever ("Service 'recovery'
+# exited with status 1"), which is what looked like a hang/bootloop —
+# TWRP never ran at all, so nothing ever drew to the display.
+#
+# TWRP in this manifest links recovery against resetprop, but the library
+# wasn't being packaged into the image. Requesting it explicitly here
+# forces the build to include it.
+PRODUCT_PACKAGES += \
+    libresetprop \
+    resetprop

@@ -134,14 +134,6 @@ TARGET_NO_RECOVERY := true
 BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
 
 BOARD_AVB_ENABLE := true
-
-# Disable dm-verity + verification for dev/testing builds.
-# --flags 2 = HASHTREE_DISABLED + VERIFICATION_DISABLED, keeps AVB
-# structure intact so the bootloader still accepts the image but the
-# partitions can be remounted rw (adb remount) after flashing.
-BOARD_AVB_MAKE_VBMETA_IMAGE_ARGS += --flags 2
-BOARD_AVB_VBMETA_SYSTEM_MAKE_VBMETA_IMAGE_ARGS += --flags 2
-BOARD_AVB_VBMETA_VENDOR_MAKE_VBMETA_IMAGE_ARGS += --flags 2
 BOARD_USES_METADATA_PARTITION := true
 
 # vendor_boot's own cmdline field, separate from BOARD_KERNEL_CMDLINE
@@ -274,6 +266,12 @@ BOARD_HAS_NO_REAL_SDCARD := false
 TARGET_USES_MKE2FS := true
 TW_NEW_ION_HEAP := true
 TW_NO_HAPTICS := true
+
+# Pulls in resetprop and libresetprop. The recovery binary in this manifest
+# links against libresetprop.so, and without this the binary fails at the
+# dynamic linker with "library libresetprop.so not found" and exits status 1
+# on every init restart — the actual cause of the apparent boot hang.
+TW_INCLUDE_RESETPROP := true
 RECOVERY_SDCARD_ON_DATA := true
 
 # Graphics
