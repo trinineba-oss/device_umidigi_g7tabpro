@@ -72,7 +72,5 @@ auto                      vfat     /devices/platform/soc/mt_usb*                
 /usb_otg    auto        /dev/block/sdd1 /dev/block/sdd        flags=display="USB-OTG 5";backup=0;storage;wipeingui;removable
 /usb-otg    auto        /dev/block/sda1                       flags=display="USB-OTG 6";backup=0;storage;wipeingui;removable
 /usb-otg	auto		/dev/block/sde1	/dev/block/sde		  flags=display="USB-OTG 7";backup=0;storage;wipeingui;removable
-/usbotg     auto        /dev/block/mmcblk1p2  /dev/block/mmcblk1p2     flags=display="USB-OTG 8";backup=0;storage;wipeingui;removable;fsflags="utf8"/vendor_boot         emmc      /dev/block/
-/
-/by-name/vendor_boot       flags=display="vendor_boot";slotselect;backup=1;flashimg=1
+/usbotg     auto        /dev/block/mmcblk1p2  /dev/block/mmcblk1p2     flags=display="USB-OTG 8";backup=0;storage;wipeingui;removable;fsflags="utf8"
 # Online TWRP Builder By Team Hovatek

@@ -279,6 +279,18 @@ BOARD_GPU_DRIVERS := mali
 TARGET_USES_MALI_GPU := true
 
 # Screen — 11" 1200x1920 IPS
+# TWRP was falling back to RGB565 (16-bit) because this was unset, then
+# segfaulting (SIGSEGV / SEGV_ACCERR) the instant it drew the splash page:
+#   I:Loading page splash
+#   I:Switching packages (splash)
+#   libc: Fatal signal 11 (SIGSEGV), code 2 (SEGV_ACCERR)
+# The DRM log also showed "Could not find obj_id = 34 / 46", i.e. incomplete
+# plane/property setup. MediaTek DRM on this panel expects a 32-bit format;
+# a 16-bit buffer is half the expected size, so the first draw writes past
+# the mapping. RGBX_8888 is what the working MT6789 reference tree
+# (transsion mt6789-common) uses.
+TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
+
 TW_SCREEN_WIDTH := 1200
 TW_SCREEN_HEIGHT := 1920
 
