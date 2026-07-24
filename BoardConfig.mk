@@ -162,7 +162,12 @@ BOARD_HAS_LARGE_FILESYSTEM := true
 BOARD_HAS_NO_SELECT_BUTTON := true
 BOARD_SUPPRESS_SECURE_ERASE := true
 TW_USE_FSCRYPT_POLICY := 2
-TW_FORCE_KEYMASTER_VER := true
+# TW_FORCE_KEYMASTER_VER removed — the recovery log showed:
+#   "Force Keymaster_Ver flag found, but keymaster_ver prop not set."
+#   "Using keymaster version '' for decryption"
+# i.e. the flag forced an EMPTY keymaster version, after which TWRP hung
+# trying to decrypt /data (stuck on the splash screen, no crash). Letting
+# TWRP autodetect is better than forcing a blank value.
 
 # Explicit partition-to-group mapping for dynamic partitions — we had
 # the group size but never declared which partitions belong to it.
@@ -261,6 +266,15 @@ TW_THEME := portrait_hdpi
 TW_INCLUDE_CRYPTO := true
 TW_INCLUDE_FBE := true
 TW_INCLUDE_FBE_METADATA_DECRYPT := true
+# Don't attempt /data decryption during startup. The log showed TWRP
+# reaching the splash screen fine, then hanging permanently at:
+#   I:Unable to mount '/data'
+#   Using additional fstab for decryption /etc/additional.fstab
+# with no further output — decryption blocks the UI from ever loading the
+# main menu. With this set, TWRP boots to a usable UI regardless; /data can
+# be decrypted manually afterwards. Flashing ROMs (the actual goal here)
+# writes to system/super, which doesn't require /data decryption at all.
+TW_SKIP_DECRYPTION_ON_BOOT := true
 TW_EXCLUDE_APEX := true
 BOARD_HAS_NO_REAL_SDCARD := false
 TARGET_USES_MKE2FS := true
