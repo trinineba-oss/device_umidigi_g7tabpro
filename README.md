@@ -7,14 +7,16 @@ public device tree existed for this tablet before this one.
 ## Current status
 
 - ✅ **Builds successfully** against the `twrp-12.1` minimal manifest (`lunch twrp_g7tabpro-eng && mka vendorbootimage`)
-- ❌ **Does not boot** — the resulting `vendor_boot.img` produces a silent hang (no crash, no kernel panic, no `pstore` capture) when flashed. Root cause not yet identified. See [Open problem: silent boot hang](#open-problem-silent-boot-hang) below.
-- ✅ A separately-built image (Hovatek's TWRP auto-builder tool, not built from this tree) **does boot** on this exact hardware, with known limitations: no working touchscreen, cannot mount/decrypt `/data`. Confirms the hardware/partition model in this tree is fundamentally correct even though our own build doesn't boot yet.
+- ✅ **Boots to the TWRP main menu.** Graphics render correctly, all partitions mount, the UI is fully reached.
+- ⚠️ **Touchscreen does not work yet** — the panel is a Chipone TDDI controller (`tddi_9551.ko`); the driver is included but not yet binding. See [Remaining issue: touch](#remaining-issue-touch).
+- ⚠️ **`/data` decryption is disabled** — FBE decryption hung the boot (unresolvable keymaster version), so crypto flags were removed from the `/data` fstab entry. `/data` shows as unmountable in TWRP. This is an intentional trade-off: flashing ROMs writes to system/super, which doesn't need `/data`.
+- Recovery is usable over `adb sideload` for flashing; on-device use awaits the touch fix.
 
-If you're picking this project up: the fastest way to make progress is
-probably comparing structurally against a working image (see below) rather
-than continuing to guess at `BoardConfig.mk` flags — that approach is what
-found every fix below, but has hit diminishing returns without a UART/serial
-console to see what a silent hang is actually doing.
+If you're picking this project up: TWRP boots and the remaining work is the
+touchscreen. The single most useful tool is `adb` into the running recovery —
+it comes up as `recovery` in `adb devices` during boot, and
+`adb shell "/system/bin/recovery 2>&1"` plus `/tmp/recovery.log` are how every
+boot issue below was diagnosed. See [Remaining issue: touch](#remaining-issue-touch).
 
 ## Confirmed hardware/partition facts
 
@@ -50,42 +52,63 @@ uses real binaries extracted from stock firmware instead, staged in
 Trade-off: no kernel patching (no KernelSU, no bug fixes) unless UMIDIGI
 provides source on request.
 
-## Open problem: silent boot hang
+## How the boot was fixed (resolved)
 
-The built `vendor_boot.img` hangs at the UMIDIGI splash screen with **no
-crash, no `pstore`/`console-ramoops` capture, and no distinguishing symptom**
-beyond "stuck." This was debugged extensively without resolution:
+The build initially appeared to "hang" at the UMIDIGI splash. It was actually
+a chain of separate issues, each found and fixed in turn (full history in git
+log). The ones that mattered:
 
-**Ruled out** (confirmed NOT the cause, each with real evidence):
-- AVB/vbmeta verification chain (`vbmeta`/`vbmeta_vendor`/`vbmeta_system` all confirmed disabled and correctly flashed)
-- A stale DSU (Dynamic System Update) boot flag from an earlier `dsusideload` test — found via `pstore` analysis, confirmed cleared (`/metadata/gsi/dsu/active` removed, verified with `sync` before reboot), and the "same crash" observed afterward was proven to be `pstore` returning stale cached data, not a new panic
-- Missing vendor blobs — this tree deliberately doesn't inherit vendor blob extraction for the TWRP build (matches convention in every real reference tree checked), and isn't needed for TWRP to reach its own UI
-- Content differences vs. a working reference — kernel modules and `fstab.mt6789` are byte-for-byte identical between this tree's build and a working reference image
+1. **Missing `libresetprop.so`** — the recovery binary failed to link and
+   exited status 1 on every init restart (a 5-second loop that looked like a
+   hang). Fixed with `TW_INCLUDE_RESETPROP := true` + packaging the library.
+   This was *the* blocker — TWRP never ran a single instruction before it.
+2. **Wrong pixel format** — TWRP fell back to RGB565 and segfaulted
+   (`SIGSEGV`/`SEGV_ACCERR`) the instant it drew the splash. Fixed with
+   `TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"` (matches the working MT6789
+   reference; the panel expects 32-bit).
+3. **FBE decryption hang** — TWRP reached the splash then hung permanently
+   trying to decrypt `/data`; the keymaster version was unresolvable because
+   `/vendor` isn't mounted that early. Fixed by removing the `fileencryption=`
+   / `keydirectory=` flags from the `/data` entry in the fstab that
+   `TARGET_RECOVERY_FSTAB` actually uses (`rootdir/etc/fstab.mt6789`).
 
-**Fixed along the way** (real bugs, but didn't resolve the hang on their own):
-- Kernel offset math (was folded into `BOARD_KERNEL_BASE` incorrectly instead of kept as separate offsets)
-- `TARGET_2ND_ARCH_VARIANT` needed `armv8-2a`, not `armv8-a`
-- `TARGET_SUPPORTS_64_BIT_APPS` needed to be explicit (newer `board_config.mk` hard-errors instead of warning)
-- `BOARD_USES_RECOVERY_AS_BOOT` conflicts with `BOARD_USES_GENERIC_KERNEL_IMAGE` — removed
-- `TARGET_COPY_OUT_VENDOR`/`PRODUCT`/`VENDOR_DLKM`/`ODM_DLKM` were never explicitly set, causing a `root/vendor` symlink-vs-populated-directory rsync conflict
-- `BOARD_*IMAGE_PARTITION_TYPE` should be `BOARD_*IMAGE_FILE_SYSTEM_TYPE` (naming bug)
-- `first_stage_ramdisk` was completely empty — `TARGET_RECOVERY_FSTAB` in `BoardConfig.mk` only tells build tools which fstab to *reference*, doesn't copy it into the ramdisk; needed explicit `PRODUCT_COPY_FILES`
-- `vendor_boot`'s ramdisk table had only 1 fragment instead of the correct 2 (platform/recovery split) — fixed via `BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT`
+Earlier structural fixes (fragment split, first_stage fstab placement, kernel
+module load-list separation, MT6789 init scripts) were all real and necessary
+groundwork, but none was the thing keeping TWRP from running — that was #1.
 
-**Still open / worth trying next**:
-- Move kernel module placement from the platform fragment to the recovery fragment (matches working reference; untested whether it matters)
-- Deeper AVB footer/descriptor-level comparison against a working image — checked footer presence and basic structure (both present, similar format), but not full descriptor contents
-- A genuine UART/serial console would resolve this immediately; no such access has been available for this debugging so far
+**Debugging note for anyone continuing this:** the recovery environment comes
+up with `adb` (shows as `recovery` in `adb devices`) *during boot*, which is
+how the above were diagnosed — `adb shell "/system/bin/recovery 2>&1"` prints
+exactly why the binary exits, and `/tmp/recovery.log` (once TWRP runs far
+enough) shows where it stops. At the main *menu*, TWRP may switch USB to MTP
+and `adb` can drop; if it does, reassign the Windows driver to "Android ADB
+Interface" in Device Manager.
 
-### Known-working reference (not built from this tree)
+## Remaining issue: touch
 
-Hovatek's TWRP auto-builder tool produces a `vendor_boot.img` that **does
-boot** on this exact tablet, confirming the partition model, fstab, and
-kernel modules in this tree are correct — it's specifically something about
-how the final image gets *assembled* that differs. Known limitations of
-that image: touchscreen doesn't work, `/data` cannot be mounted/decrypted.
-Useful as a working baseline for touch/decryption debugging even though
-it's not derived from this device tree.
+The panel is a **Chipone TDDI** controller (touch+display combined). The
+driver `tddi_9551.ko` was pulled from stock `/vendor/lib/modules/` and is
+included in the recovery module set (`prebuilt/modules/`, added to
+`modules.load.recovery` after its deps `panel-dk068h5gq-dsi-vdo` and
+`mtk_disp_notify`). Confirmed facts:
+
+- The `.ko` has the **same vermagic** as the 171 modules that load
+  successfully, so vermagic is *not* the blocker (this was checked and ruled
+  out).
+- The device-tree `touch_panel` node reports `compatible = "goodix,touch"`,
+  while the driver's alias binds to `chipone_tddi` — a likely mismatch, but
+  unconfirmed as the cause.
+- On the last testable build, `getevent -p` showed only the two button input
+  devices; no touchscreen. Whether `tddi_9551` loads-but-doesn't-bind vs.
+  doesn't-load-at-all was not confirmed on the final build (adb access was
+  lost at the menu before this could be checked).
+
+Next steps for touch: with `adb` working at the menu, run
+`lsmod | grep tddi`, `dmesg | grep -iE 'tddi|chipone|touch'`, and
+`getevent -p`. If it loads but doesn't bind, the fix is aligning the DT
+compatible (`goodix,touch` vs `chipone_tddi`) — likely via a DTBO overlay
+that isn't currently applied in recovery. If it doesn't load, check its
+dependency/probe order.
 
 ## Donor/reference trees used
 
