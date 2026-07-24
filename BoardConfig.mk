@@ -161,7 +161,7 @@ ALLOW_MISSING_DEPENDENCIES := true
 BOARD_HAS_LARGE_FILESYSTEM := true
 BOARD_HAS_NO_SELECT_BUTTON := true
 BOARD_SUPPRESS_SECURE_ERASE := true
-TW_USE_FSCRYPT_POLICY := 2
+# TW_USE_FSCRYPT_POLICY := 2   # disabled along with the other crypto flags below
 # TW_FORCE_KEYMASTER_VER removed — the recovery log showed:
 #   "Force Keymaster_Ver flag found, but keymaster_ver prop not set."
 #   "Using keymaster version '' for decryption"
@@ -263,18 +263,24 @@ AB_OTA_PARTITIONS := \
 # both are set.
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/rootdir/etc/fstab.mt6789
 TW_THEME := portrait_hdpi
-TW_INCLUDE_CRYPTO := true
-TW_INCLUDE_FBE := true
-TW_INCLUDE_FBE_METADATA_DECRYPT := true
-# Don't attempt /data decryption during startup. The log showed TWRP
-# reaching the splash screen fine, then hanging permanently at:
-#   I:Unable to mount '/data'
-#   Using additional fstab for decryption /etc/additional.fstab
-# with no further output — decryption blocks the UI from ever loading the
-# main menu. With this set, TWRP boots to a usable UI regardless; /data can
-# be decrypted manually afterwards. Flashing ROMs (the actual goal here)
-# writes to system/super, which doesn't require /data decryption at all.
-TW_SKIP_DECRYPTION_ON_BOOT := true
+# Crypto/FBE decryption is DISABLED. The recovery log showed TWRP reaching
+# the splash screen fine, then hanging permanently (process alive, stuck in
+# futex_wait_queue_me) at "Using additional fstab for decryption". Root cause
+# from the log:
+#   I:Keymaster_Ver::Unable to find vendor manifest on the device...
+#   I:Keymaster_Ver::Using keymaster version '' for decryption
+# TWRP looks up the keymaster version in /vendor/etc/vintf/manifest*.xml, but
+# /vendor is only symlinked (never mounted) at that point, so the manifest
+# isn't reachable, the version resolves to empty, and decryption blocks.
+# TW_SKIP_DECRYPTION_ON_BOOT was tried first and is silently ignored by this
+# TWRP branch, so the crypto flags are removed from the /data entry in
+# recovery.fstab instead, and the build flags disabled here.
+#
+# Consequence: /data shows as encrypted/unmountable. That's acceptable for
+# the goal here — flashing ROMs writes to system/super, not /data.
+# TW_INCLUDE_CRYPTO := true
+# TW_INCLUDE_FBE := true
+# TW_INCLUDE_FBE_METADATA_DECRYPT := true
 TW_EXCLUDE_APEX := true
 BOARD_HAS_NO_REAL_SDCARD := false
 TARGET_USES_MKE2FS := true
