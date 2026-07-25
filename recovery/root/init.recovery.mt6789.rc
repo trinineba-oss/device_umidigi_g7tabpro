@@ -12,4 +12,18 @@ on fs && property:ro.debuggable=0
     start adbd
 
 on boot
-    exec u:r:update_engine:s0 root root -- /system/bin/mtk_plpath_utils
+    # mtk_plpath_utils is not present in this image and is not needed —
+    # /dev/block/by-name/ is fully populated without it (verified). The exec
+    # below only produced "Cannot find ... No such file or directory" in the
+    # init log, so it's disabled.
+    # exec u:r:update_engine:s0 root root -- /system/bin/mtk_plpath_utils
+    start dumplogs
+
+# Diagnostic: dumps dmesg / recovery.log / input state to the microSD card,
+# so bring-up can be debugged without adb. Remove once adb is reliable.
+service dumplogs /system/bin/sh /system/bin/dumplogs.sh
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
