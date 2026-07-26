@@ -7136,3 +7136,12 @@
 	pinctrl-5 = <&ctp_ts_sda_active>;
 	pinctrl-6 = <&ctp_ts_sda_suspend>;
 };
+
+&{/chosen} {
+	/* struct tag_bootmode { u32 size; u32 tag; u32 bootmode; u32 boottype; }
+	 * bootmode = 0 (NORMAL_BOOT). The chipone touch driver's boot_mode_check()
+	 * follows the node's "bootmode" phandle to /chosen and reads this property;
+	 * without it the driver logs "failed to get atag,boot" and never registers,
+	 * which is why the module loads but never probes. */
+	atag,boot = <0x00 0x00 0x00 0x00>;
+};
