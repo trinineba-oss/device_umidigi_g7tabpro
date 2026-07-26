@@ -7145,3 +7145,13 @@
 	 * which is why the module loads but never probes. */
 	atag,boot = <0x00 0x00 0x00 0x00>;
 };
+
+&{/chosen} {
+	/* Exact bytes as present in normal boot (read from a booted system):
+	 *   10 00 00 00  02 08 00 41  00 00 00 00  02 00 00 00
+	 * = size 0x10, tag 0x41000802, bootmode 0 (NORMAL_BOOT), boottype 2.
+	 * The chipone touch driver's boot_mode_check() follows the node's
+	 * "bootmode" phandle here and reads atag,boot; without it the driver
+	 * never registers, so it loads but never probes. */
+	atag,boot = <0x10000000 0x02080041 0x00000000 0x02000000>;
+};
