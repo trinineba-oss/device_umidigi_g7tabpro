@@ -1,0 +1,17 @@
+Chipone touch firmware for the recovery ramdisk.
+
+The driver (tddi_9551.ko) uses request_firmware(), which searches /lib/firmware.
+In recovery, /vendor is NOT mounted, so the stock path
+(firmware_class.path=/vendor/firmware, set in the kernel cmdline) is unusable.
+Staging the blobs at /lib/firmware inside the recovery ramdisk makes them
+reachable.
+
+Filenames the driver requests (extracted from the module binary):
+  chipone_firmware.bin      <- included here
+  chipone_firmware_ld.bin   <- included here
+  chipone_cmds.bin          <- optional (sysfs-triggered only)
+  chipone_limit.bin         <- optional (factory test only)
+
+Note: the module also contains icnl9951_driver_builtin_firmware and
+icnl9951r_driver_builtin_firmware symbols, so for those panel variants the
+driver may not need an external file at all.
