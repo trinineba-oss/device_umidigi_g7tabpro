@@ -7155,3 +7155,21 @@
 	 * never registers, so it loads but never probes. */
 	atag,boot = <0x10000000 0x02080041 0x00000000 0x02000000>;
 };
+
+/* The bootloader OVERWRITES /chosen/atag,boot at runtime with the real boot
+ * mode — in recovery it becomes 2 (RECOVERY_BOOT) regardless of the DTS value.
+ * The chipone driver's boot_mode_check() reads it and refuses to register
+ * ("Calibration Mode! Don't register cts_ts driver"), which is why the driver
+ * binds to the i2c bus and 0-0048 exists, but no input device appears.
+ * This private node is not touched by the bootloader and forces bootmode 0
+ * (NORMAL_BOOT). Layout: size, tag, bootmode, boottype.
+ */
+&{/} {
+	fake_chosen: fake_chosen {
+		atag,boot = <0x10000000 0x02080041 0x00000000 0x02000000>;
+	};
+};
+
+&{/soc/i2c@11e00000/chipone_touch@48} {
+	bootmode = <&fake_chosen>;
+};
