@@ -1,0 +1,6 @@
+# Enables the Chipone TDDI driver's own debug logging (parm=debug_log in the
+# module). Without this the driver's <I>/<E>CTS-* messages never appear in
+# dmesg, and touch bring-up has been debugged blind: the driver binds
+# successfully (0-0048/driver symlink exists) but registers no input device,
+# and we can't see why without this.
+options tddi_9551 debug_log=1

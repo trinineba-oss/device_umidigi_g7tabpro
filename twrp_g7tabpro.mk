@@ -90,3 +90,14 @@ PRODUCT_COPY_FILES += \
 PRODUCT_PACKAGES += \
     libresetprop \
     resetprop
+
+# Touch bring-up diagnostics: enable the Chipone TDDI driver's own debug
+# logging (parm=debug_log, default N/off). Without this, the driver's
+# <I>/<E>CTS-* messages never appear in dmesg — the driver BINDS
+# successfully (confirmed: /sys/bus/i2c/devices/0-0048/driver symlink
+# exists) but registers no input device, and with logging off we have no
+# way to see why. modules.options sits alongside modules.load/modules.dep
+# at lib/modules/ so first-stage init's module loader picks up the
+# "options tddi_9551 debug_log=1" line automatically.
+PRODUCT_COPY_FILES += \
+    device/umidigi/g7tabpro/prebuilt/modules/modules.options:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/lib/modules/modules.options
