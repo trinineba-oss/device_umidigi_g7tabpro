@@ -1,41 +1,29 @@
 #!/system/bin/sh
-# Diagnostic dump v5 — v4's triggers didn't exist (no /sys/class/graphics/,
-# no drm */force file matched). This properly enumerates what IS available
-# on card0-DSI-1 and mediatek_drm's debugfs before attempting anything, then
-# tries the correct DRM force path directly.
+# Diagnostic dump v6 — confirms whether debug_log=1 actually took effect.
+# v5 never checked this, so we don't yet know if modules.options is being
+# applied at all, or if it applied but debug_log doesn't gate the messages
+# we need. This checks BEFORE any action, then also tries forcing it via
+# direct sysfs write as a fallback (in case load-time modules.options isn't
+# honored by this recovery's module loader).
 
 sleep 25
 
-D0=/sys/class/drm/card0-DSI-1
-ls -la $D0/ > /tmp/dsi1_dir.txt 2>&1
-cat $D0/status > /tmp/status_before.txt 2>&1
-[ -e $D0/force ] && echo "force EXISTS" > /tmp/force_exists.txt || echo "force MISSING" > /tmp/force_exists.txt
-[ -e $D0/dpms ] && cat $D0/dpms > /tmp/dpms_before.txt 2>&1
+# What debug_log actually is, straight from modules.options loading
+cat /sys/module/tddi_9551/parameters/debug_log > /tmp/debug_log_from_options.txt 2>&1
 
-ls -la /sys/kernel/debug/dri/ > /tmp/debugfs_dri.txt 2>&1
-ls -la /sys/kernel/debug/dri/0/ > /tmp/debugfs_dri0.txt 2>&1 
-find /sys/kernel/debug/dri -iname "*panel*" -o -iname "*disp*" -o -iname "*power*" > /tmp/debugfs_relevant.txt 2>&1
+# Fallback: force it at runtime regardless, in case modules.options wasn't
+# applied. If this write fails, the parameter is likely read-only after init
+# (which would mean modules.options really is the only mechanism, and its
+# failure to take effect points elsewhere).
+echo 1 > /sys/module/tddi_9551/parameters/debug_log 2>/tmp/debug_log_write_error.txt
+cat /sys/module/tddi_9551/parameters/debug_log > /tmp/debug_log_after_force.txt 2>&1
 
-mkdir -p /tmp/pre
-cat /proc/bus/input/devices > /tmp/pre_input.txt 2>&1
-
-# Try dpms cycle if it exists (0=on, 3=off — this is the real DRM legacy
-# "power off/on the display" knob, closer to what a compositor does than
-# force ever was)
-if [ -e $D0/dpms ]; then
-    echo "3" > $D0/dpms 2>>/tmp/trigger_log.txt
-    sleep 1
-    echo "0" > $D0/dpms 2>>/tmp/trigger_log.txt
-    echo "dpms cycle attempted" >> /tmp/trigger_log.txt
-fi
-
-# Try force as well, now that we've confirmed whether it exists
-if [ -e $D0/force ]; then
-    echo "on" > $D0/force 2>>/tmp/trigger_log.txt
-    echo "force write attempted" >> /tmp/trigger_log.txt
-fi
-
-sleep 3
+# Try to force a re-probe by unbinding/rebinding — if the driver's logging IS
+# now on, this should produce a fresh, fully-logged probe attempt.
+echo "0-0048" > /sys/bus/i2c/drivers/chipone_tddi/unbind 2>/tmp/unbind_result.txt
+sleep 1
+echo "0-0048" > /sys/bus/i2c/drivers/chipone_tddi/bind 2>/tmp/bind_result.txt
+sleep 2
 
 OUT=/tmp/sdlog
 mkdir -p $OUT
@@ -46,26 +34,22 @@ done
 D=$OUT/twrplogs
 mkdir -p $D
 
-cp /tmp/dsi1_dir.txt $D/ 2>/dev/null
-cp /tmp/status_before.txt $D/ 2>/dev/null
-cp /tmp/force_exists.txt $D/ 2>/dev/null
-cp /tmp/dpms_before.txt $D/ 2>/dev/null
-cp /tmp/debugfs_dri.txt $D/ 2>/dev/null
-cp /tmp/debugfs_dri0.txt $D/ 2>/dev/null
-cp /tmp/debugfs_relevant.txt $D/ 2>/dev/null
-cp /tmp/trigger_log.txt $D/ 2>/dev/null
-cp /tmp/pre_input.txt $D/ 2>/dev/null
+cp /tmp/debug_log_from_options.txt $D/ 2>/dev/null
+cp /tmp/debug_log_write_error.txt  $D/ 2>/dev/null
+cp /tmp/debug_log_after_force.txt  $D/ 2>/dev/null
+cp /tmp/unbind_result.txt          $D/ 2>/dev/null
+cp /tmp/bind_result.txt            $D/ 2>/dev/null
 
-dmesg                            > $D/dmesg.txt 2>&1
-cp /tmp/recovery.log               $D/recovery.log 2>&1
-cat /proc/bus/input/devices      > $D/input_devices_AFTER.txt 2>&1
-getevent -p                      > $D/getevent_AFTER.txt 2>&1
-readlink /sys/bus/i2c/devices/0-0048/driver > $D/driver_AFTER.txt 2>&1
-cat $D0/status                   > $D/status_after.txt 2>&1
+dmesg                             > $D/dmesg.txt 2>&1
+cp /tmp/recovery.log                $D/recovery.log 2>&1
+cat /proc/bus/input/devices       > $D/input_devices.txt 2>&1
+getevent -p                       > $D/getevent.txt 2>&1
+readlink /sys/bus/i2c/devices/0-0048/driver > $D/driver_state.txt 2>&1
+dmesg | grep -iE "cts|chipone|tddi" > $D/cts_msgs.txt 2>&1
 
 sleep 15
-dmesg                            > $D/dmesg_later.txt 2>&1
-cat /proc/bus/input/devices      > $D/input_devices_LATER.txt 2>&1
+dmesg                             > $D/dmesg_later.txt 2>&1
+cat /proc/bus/input/devices       > $D/input_devices_later.txt 2>&1
 
 sync
 umount $OUT 2>/dev/null
