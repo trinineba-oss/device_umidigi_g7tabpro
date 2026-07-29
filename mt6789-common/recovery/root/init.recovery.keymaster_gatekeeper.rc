@@ -1,0 +1,29 @@
+# Bundled keymaster_attestation + gatekeeper HAL services for TWRP FBE decrypt.
+# These are LOCAL ramdisk copies (see vendor/bin/hw and vendor/lib64 in this
+# overlay) - they do not depend on the real /vendor partition being mounted.
+#
+# Source device: umidigi_g7tabpro (MT6789 / Helio G99), TEE = TrustKernel
+# Pulled and verified via Termux root shell, dependency chain confirmed with
+# readelf -d (see project chat history for full trace).
+
+service keymaster_attestation-1-1 /vendor/bin/hw/vendor.mediatek.hardware.keymaster_attestation@1.1-service
+    interface vendor.mediatek.hardware.keymaster_attestation@1.0::IKeymasterDevice default
+    interface vendor.mediatek.hardware.keymaster_attestation@1.1::IKeymasterDevice default
+    class hal
+    user system
+    group system
+    disabled
+
+service vendor.gatekeeper-1-0 /vendor/bin/hw/android.hardware.gatekeeper@1.0-service
+    interface android.hardware.gatekeeper@1.0::IGatekeeper default
+    class hal
+    user system
+    group system
+
+# keymaster_attestation ships "disabled" upstream (stock ROM starts it via a
+# trigger elsewhere that TWRP's ramdisk doesn't inherit). Force it up early,
+# well before TWRP's own decrypt/Keymaster_Ver logic runs.
+# gatekeeper is NOT disabled, so it starts automatically once TWRP issues
+# class_start hal (already present in stock TWRP init flow).
+on init
+    start keymaster_attestation-1-1

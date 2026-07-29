@@ -6,7 +6,6 @@ out/
 # Accidentally-cloned reference repos (this has happened before —
 # see README's debugging history. Clone reference trees OUTSIDE this
 # device tree's directory, not inside it.)
-mt6789-common/
 
 # OS/editor cruft
 .DS_Store
