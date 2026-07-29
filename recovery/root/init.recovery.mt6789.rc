@@ -1,3 +1,4 @@
+import /init.recovery.keymaster_gatekeeper.rc
 import /init.recovery.project.rc
 
 on init
