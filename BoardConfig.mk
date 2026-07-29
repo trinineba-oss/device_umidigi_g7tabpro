@@ -311,6 +311,13 @@ TARGET_USES_MALI_GPU := true
 # (transsion mt6789-common) uses.
 TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
 
+# Touch works (after the tddi_9551 boot_mode_check binary patch) but reports
+# coordinates rotated 180 degrees. Flipping both X and Y corrects a 180 turn
+# (SWAP_XY is only for 90/270, so it is NOT used here). Pure TWRP build flags;
+# no driver or DTB change needed.
+RECOVERY_TOUCHSCREEN_FLIP_X := true
+RECOVERY_TOUCHSCREEN_FLIP_Y := true
+
 TW_SCREEN_WIDTH := 1200
 TW_SCREEN_HEIGHT := 1920
 
