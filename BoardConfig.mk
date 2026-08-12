@@ -323,3 +323,17 @@ TW_SCREEN_WIDTH := 1200
 TW_SCREEN_HEIGHT := 1920
 
 -include vendor/umidigi/g7tabpro/BoardConfigVendor.mk
+
+# --- PC-free flashing / usability additions ---
+# Repack tools: lets TWRP unpack/repack boot images in-place, which is what
+# allows installing Magisk directly from recovery with no PC. This is the
+# whole point of the project, so it earns its ~2MB.
+TW_INCLUDE_REPACKTOOLS := true
+
+# Filesystems: card in the reference unit is FAT32, but most large cards ship
+# exFAT and OTG sticks are often NTFS.
+TW_INCLUDE_EXFAT := true
+TW_INCLUDE_NTFS_3G := true
+
+# Reboot menu extras (MTK)
+TW_HAS_DOWNLOAD_MODE := true
