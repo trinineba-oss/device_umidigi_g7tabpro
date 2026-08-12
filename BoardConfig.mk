@@ -337,3 +337,10 @@ TW_INCLUDE_NTFS_3G := true
 
 # Reboot menu extras (MTK)
 TW_HAS_DOWNLOAD_MODE := true
+
+# Backlight - node confirmed on-device: /sys/class/leds/lcd-backlight
+# (MTK mtk_leds driver, max_brightness=255). Without these TWRP has no
+# brightness slider and the panel sits wherever the kernel left it.
+TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
+TW_MAX_BRIGHTNESS := 255
+TW_DEFAULT_BRIGHTNESS := 128
