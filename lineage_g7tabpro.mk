@@ -21,3 +21,13 @@ PRODUCT_MODEL := G7 Tab Pro
 PRODUCT_GMS_CLIENTID_BASE := android-umidigi
 
 TARGET_SCREEN_DENSITY := 200  # 11" 1200x1920 ~206ppi -> tune after first boot
+
+# AOSP's reference/example GNSS implementation (hardware/interfaces/gnss/aidl/default,
+# packaged as the com.android.hardware.gnss vendor APEX) gets auto-included and
+# collides at install time with our real extracted MTK GNSS HAL + VINTF manifest,
+# both trying to install a file named gnss-default.xml
+# ("MODULE.TARGET.ETC.gnss-default.xml already defined by
+# hardware/interfaces/gnss/aidl/default"). This device has a real hardware GNSS
+# HAL from the stock firmware, so drop the generic default in its favor. Placed
+# here (not in device.mk) so it's the last thing evaluated after every inherit.
+PRODUCT_PACKAGES -= com.android.hardware.gnss

@@ -14,12 +14,22 @@ TARGET_ARCH_VARIANT := armv8-a
 TARGET_CPU_ABI := arm64-v8a
 TARGET_CPU_VARIANT := cortex-a55
 TARGET_CPU_VARIANT_RUNTIME := cortex-a55
-TARGET_2ND_ARCH := arm
-TARGET_2ND_ARCH_VARIANT := armv8-2a
-TARGET_2ND_CPU_ABI := armeabi-v7a
-TARGET_2ND_CPU_ABI2 := armeabi
-TARGET_2ND_CPU_VARIANT := cortex-a55
-TARGET_2ND_CPU_VARIANT_RUNTIME := cortex-a55
+
+# 64-bit only, deliberately (2026-08-13): TARGET_2ND_ARCH (arm 32-bit compat)
+# is removed. vendor/lineage/build/soong's generated_kernel_includes only
+# generates ONE set of kernel UAPI headers (ARCH=$(KERNEL_ARCH), i.e. arm64
+# here) and bionic's vendor-variant libc needs correctly arch-matched
+# headers for EVERY arch it's built for - the 32-bit variant was getting the
+# arm64-only fpsimd_context struct (uses __uint128_t, invalid for a 32-bit
+# compile): "unknown type name '__uint128_t'" in
+# generated_kernel_includes/gen/usr/include/asm/sigcontext.h. This is a
+# structural single-arch limitation of that generic Lineage mechanism, not a
+# config typo - patching vendor/lineage (upstream, not ours to maintain
+# long-term) wasn't worth it for legacy 32-bit app support on a 2024+
+# device. Stock firmware does ship some 32-bit vendor blobs (both lib/ and
+# lib64/ exist in the real extraction) so this isn't zero-impact, but
+# re-adding 2nd-arch support later doesn't require redoing anything else if
+# it turns out to matter.
 
 # Required explicitly — newer board_config.mk hard-errors if neither this
 # nor TARGET_SUPPORTS_32_BIT_APPS is set on a 64-bit TARGET_ARCH, instead
@@ -47,7 +57,13 @@ BOARD_DTB_SIZE := 182269
 # form is what actually generates that rule; all .dtb files inside it get
 # concatenated into dtb.img.
 BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt/dtb
-TARGET_PREBUILT_DTBO := $(DEVICE_PATH)/prebuilt/dtbo.img
+# TARGET_PREBUILT_DTBO doesn't exist as a build variable in this AOSP
+# generation at all (confirmed: zero references anywhere in build/make) -
+# BOARD_PREBUILT_DTBOIMAGE is the real one (build/make/core/Makefile
+# INSTALLED_DTBOIMAGE_TARGET rule). The wrong name meant ninja fell through
+# to expecting a kernel-source-compiled dtbo.img
+# (obj/DTBO_OBJ/arch/arm64/boot/dtbo.img) instead of using our prebuilt.
+BOARD_PREBUILT_DTBOIMAGE := $(DEVICE_PATH)/prebuilt/dtbo.img
 TARGET_KERNEL_ARCH := arm64
 BOARD_KERNEL_IMAGE_NAME := Image.gz
 # If you later obtain kernel source, delete the 3 TARGET_PREBUILT_* lines
@@ -55,6 +71,19 @@ BOARD_KERNEL_IMAGE_NAME := Image.gz
 # TARGET_KERNEL_SOURCE := kernel/umidigi/mt6789
 # TARGET_KERNEL_CONFIG := g7tabpro_defconfig
 # TARGET_KERNEL_HEADER_ARCH := arm64
+
+# Not the device's own vendor kernel source (none exists - UMIDIGI never
+# released it). But bionic's vendor-variant libc genuinely needs REAL kernel
+# UAPI headers to build (sigset_t, stack_t, __sighandler_t etc - a trivial
+# empty stub here broke compilation everywhere those fundamental POSIX types
+# are used). GKI headers are standardized/public across the whole GKI
+# ecosystem by design, so Google's own public common kernel at this device's
+# confirmed real base version (android_kernel_mediatek_mt6789/README.md:
+# "GKI base | android.googlesource.com/kernel/common @ android12-5.10") is
+# genuinely correct here, not a workaround - shallow-cloned to
+# kernel/umidigi/g7tabpro (matching vendor/lineage/config/BoardConfigKernel.mk's
+# own kernel/$(TARGET_DEVICE_DIR) default convention).
+TARGET_KERNEL_SOURCE := kernel/umidigi/g7tabpro
 
 # --- Boot image — CONFIRMED, cross-checked against a real shipped MT6789
 # device tree (github.com/MT6789-Rock/device_xiaomi_rock, same SoC/GPU).
@@ -199,6 +228,12 @@ BOARD_SUPER_PARTITION_SIZE := 9663676416            # super, 0x240000000
 BOARD_SUPER_PARTITION_GROUPS := main_group
 BOARD_MAIN_GROUP_SIZE := 9647161344                 # super size minus ~16MB metadata headroom — TODO verify against OEM fstab if you find one
 TARGET_USES_DYNAMIC_PARTITIONS := true
+# NOTE: individual partition sizes also need PRODUCT_USE_DYNAMIC_PARTITIONS
+# (a *product*-config var, auto-derives PRODUCT_USE_DYNAMIC_PARTITION_SIZE)
+# set to true - without it build_image.py crashes with
+# KeyError: 'partition_size' at the image-packaging stage. That var is
+# .KATI_READONLY by the time BoardConfig.mk (board-config phase) runs, so
+# it can't be set here - see device.mk (product-config phase, runs earlier).
 BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
