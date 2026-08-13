@@ -9,7 +9,7 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)
 $(call inherit-product, device/umidigi/g7tabpro/device.mk)
 
 # Inherit some common Lineage stuff
-$(call inherit-product, vendor/lineage/config/common_tablet_wifionly.mk)  # TODO: remove _wifionly if this SKU has cellular
+$(call inherit-product, vendor/lineage/config/common_full_tablet.mk)  # has cellular - md1img modem partition present in BoardConfig.mk, retail listing confirms 4G SIM
 
 PRODUCT_NAME := lineage_g7tabpro
 PRODUCT_DEVICE := g7tabpro

@@ -146,11 +146,17 @@ BOARD_MKBOOTIMG_ARGS += --board ""
 # values so TEE/RPMB-level downgrade rejection doesn't kick in — this
 # operates independently of the vbmeta verification flags, so disabling
 # vbmeta verification alone doesn't cover it.
-PLATFORM_SECURITY_PATCH := 2099-12-31
-PLATFORM_VERSION := 99.87.36
-PLATFORM_VERSION_LAST_STABLE := $(PLATFORM_VERSION)
-VENDOR_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
-BOOT_SECURITY_PATCH := $(PLATFORM_SECURITY_PATCH)
+#
+# PLATFORM_SECURITY_PATCH / PLATFORM_VERSION / PLATFORM_VERSION_LAST_STABLE
+# are .KATI_READONLY as of this AOSP generation (build/make/core/version_util.mk)
+# - must go through RELEASE_PLATFORM_* flags now, cannot be set here directly.
+# VENDOR_SECURITY_PATCH and BOOT_SECURITY_PATCH are still freely settable and
+# are what actually matters for the on-device TEE/AVB check (BOOT_SECURITY_PATCH
+# feeds com.android.build.boot.security_patch directly - see SESSION_HANDOFF.md
+# Wall 2), so they stay as independent literals instead of deriving from
+# PLATFORM_SECURITY_PATCH.
+VENDOR_SECURITY_PATCH := 2099-12-31
+BOOT_SECURITY_PATCH := 2099-12-31
 
 # Build compatibility hacks
 BUILD_BROKEN_DUP_RULES := true
