@@ -1,0 +1,25 @@
+# Copyright (C) 2026 The LineageOS Project
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# This file is intentionally left (mostly) empty.
+#
+# Do NOT hand-write blob paths here from guesswork — wrong/missing paths
+# produce a ROM that builds but doesn't boot (or boots without camera,
+# wifi, sensors, etc). Instead:
+#
+#   1. Build extract-utils' companion `lib` tooling into your tree
+#      (tools/extract-utils from LineageOS or a compatible fork).
+#   2. Run ./extract-files.sh against your rooted device or an unpacked
+#      stock /vendor + /system/vendor dump.
+#   3. It will walk installed APKs/libs, diff against AOSP, and write the
+#      real list of proprietary paths here automatically.
+#
+# Common categories you SHOULD expect to see populated for an MT6789
+# (Helio G99) device once generated:
+#   - vendor/lib*/hw/*mtk* (audio, gralloc, power HALs)
+#   - vendor/lib*/libmtkcam*, camera HAL + vendor tags
+#   - vendor/firmware/* (Wi-Fi/BT combo chip firmware — check for mt66xx or
+#     mt79xx naming to identify the exact connectivity chip)
+#   - vendor/lib*/egl/*, libGLES_mali* (Mali-G57 MC2 blobs)
+#   - vendor/bin/mnld, gpsd (GNSS)
