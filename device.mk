@@ -23,6 +23,32 @@ $(call inherit-product, vendor/umidigi/g7tabpro/g7tabpro-vendor.mk)
 
 PRODUCT_CHARACTERISTICS := tablet
 
+# Treble (2026-08-14): PRODUCT_SHIPPING_API_LEVEL was never set, which is the
+# root of the "This device does not have Treble enabled. This is unsafe."
+# warning every build emitted. build/make/core/config.mk derives
+# PRODUCT_FULL_TREBLE from it (true iff >= 26); with it empty the whole chain
+# collapsed to false:
+#     PRODUCT_FULL_TREBLE              = false
+#     PRODUCT_TREBLE_LINKER_NAMESPACES = false   <-- the load-bearing one
+#     PRODUCT_ENFORCE_VINTF_MANIFEST   = false
+#
+# This device is unambiguously Treble (separate vendor partition, VNDK-based
+# vendor blobs, VINTF manifest target-level="6"). Its vendor binaries expect
+# Treble linker-namespace isolation to resolve libs from /vendor/lib64 and the
+# VNDK; with namespaces disabled linkerconfig emits a legacy non-Treble config
+# and vendor processes can fail to resolve their libraries entirely - a
+# plausible cause of the silent ~2s reboot loop seen on the first flash test
+# (init starts, vendor services fail to link, loop; no boot animation, no adb).
+#
+# 33 = Android 13, the API level this device originally shipped with (stock
+# fingerprint UMIDIGI/G7_Tab_Pro/G7_Tab_Pro:13/TP1A.220624.014/...).
+#
+# NOTE: this also flips PRODUCT_ENFORCE_VINTF_MANIFEST to true, so checkvintf
+# now actually enforces the VINTF manifest rather than just warning. That is
+# the correct behaviour and real validation, but expect it to surface manifest
+# errors that were previously passing silently.
+PRODUCT_SHIPPING_API_LEVEL := 33
+
 # Dynamic partitions (BoardConfig.mk sets TARGET_USES_DYNAMIC_PARTITIONS,
 # the super-partition mechanism itself) also need
 # PRODUCT_USE_DYNAMIC_PARTITIONS set here, in the product-config phase -

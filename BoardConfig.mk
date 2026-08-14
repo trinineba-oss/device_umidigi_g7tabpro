@@ -165,6 +165,27 @@ BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
 BOARD_AVB_ENABLE := true
 BOARD_USES_METADATA_PARTITION := true
 
+# Explicit AVB signing key (2026-08-13): without BOARD_AVB_KEY_PATH set, the
+# build system falls back to its own default, external/avb/test/data/
+# testkey_rsa4096.pem - verified via avbtool that this is exactly what our
+# first flash-tested vbmeta.img used (public key sha1 2597c218aae470a13...).
+# This device's bootloader has only ever been proven to accept the RSA2048
+# variant of the AOSP testkey (public key sha1
+# cdbb77177f731920bbe0a0f94f84d9038ae0617d) - that's what the stock ROM's own
+# vbmeta.img uses, confirmed by extracting and inspecting it directly, and
+# it's the same key the SESSION_HANDOFF.md Wall 1 investigation documented
+# at length (the whole premise of the haha-you-used-testkeys toolkit). A
+# 2-second-and-under bootloop, on BOTH normal and recovery boot identically,
+# is consistent with bootloader-level AVB rejection (which runs before the
+# kernel picks a ramdisk) rather than anything userspace-level. Matching the
+# proven key is the well-evidenced first fix to test in isolation - it isn't
+# guaranteed sufficient on its own (Wall 1's own chained-topology attempt
+# still bootlooped even with a matched top key, for a reason never fully
+# root-caused), but our topology here is simpler (no chaining, a single
+# self-contained vbmeta.img) so that precedent doesn't necessarily apply.
+BOARD_AVB_ALGORITHM := SHA256_RSA2048
+BOARD_AVB_KEY_PATH := external/avb/test/data/testkey_rsa2048.pem
+
 # vendor_boot's own cmdline field, separate from BOARD_KERNEL_CMDLINE
 BOARD_VENDOR_BASE := 0x3fff8000
 BOARD_VENDOR_CMDLINE := bootopt=64S3,32N2,64N2
@@ -184,7 +205,7 @@ BOARD_MKBOOTIMG_ARGS += --board ""
 # feeds com.android.build.boot.security_patch directly - see SESSION_HANDOFF.md
 # Wall 2), so they stay as independent literals instead of deriving from
 # PLATFORM_SECURITY_PATCH.
-VENDOR_SECURITY_PATCH := 2099-12-31
+VENDOR_SECURITY_PATCH := 2024-10-05
 BOOT_SECURITY_PATCH := 2099-12-31
 
 # Build compatibility hacks
@@ -385,3 +406,17 @@ TW_HAS_DOWNLOAD_MODE := true
 TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
 TW_MAX_BRIGHTNESS := 255
 TW_DEFAULT_BRIGHTNESS := 128
+
+# VNDK (2026-08-14): the vendor partition is built from the stock Android 12
+# blobs, whose own build.prop declares ro.vndk.version=31. Leaving
+# BOARD_VNDK_VERSION unset shipped a vendor partition that declared no VNDK
+# version at all, so linkerconfig never built the VNDK namespace for it.
+# prebuilts/vndk/v31 is present in the tree.
+# NOTE: BOARD_VNDK_VERSION is a NO-OP in this AOSP generation --
+# build/make/core/config.mk:1283 unconditionally clears it, and main.mk:231
+# only emits ro.vndk.version from now-always-empty vars. VNDK is removed.
+# A VNDK-31 vendor cannot be served by the build system here; GSIs that
+# support one (AndyYan/phh) ship flattened com.android.vndk.vNN in system_ext
+# out-of-band. Do not set BOARD_VNDK_VERSION again -- it does nothing.
+# The mechanism that DOES exist is GRF: BOARD_SHIPPING_API_LEVEL.
+BOARD_SHIPPING_API_LEVEL := 31
