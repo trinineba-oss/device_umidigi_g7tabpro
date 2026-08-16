@@ -101,4 +101,48 @@ PRODUCT_PACKAGES += \
     recovery-refresh \
     recovery-persist
 
+
+# ---------------------------------------------------------------------------
+# VNDK 31 libraries required by the Android-12-era vendor blobs (2026-08-15)
+#
+# This device's vendor is VNDK-31 era: stock declares ro.vndk.version=31 and
+# ro.board.first_api_level=31, and its binaries link against libraries using
+# the Android-11/12 "-ndk_platform.so" naming (renamed to "-ndk.so" in 13+).
+#
+# VNDK is REMOVED in this AOSP generation - build/make/core/config.mk
+# unconditionally clears BOARD_VNDK_VERSION - so the build ships no VNDK
+# snapshot and creates no VNDK linker namespace. That left 13 libraries that
+# vendor binaries need resolvable from NOWHERE (verified: absent from both
+# our system.img and vendor.img). A service whose shared libraries cannot be
+# resolved never starts; keystore2 then finds KeyMint declared in VINTF but
+# never registered, which is exactly KEYMINT_NOT_CONFIGURED (-64) - the error
+# this project long attributed solely to TEE damage.
+#
+# With VNDK disabled, vendor processes resolve from /vendor/lib64, so the
+# libraries are installed there directly rather than via a VNDK namespace.
+# (PeterGSI, which boots on this hardware, instead ships
+# com.android.vndk.v31.apex in system_ext - a different route to the same end.)
+#
+# The set is not guesswork: it is the exact unresolved closure, computed by
+# walking DT_NEEDED across every ELF in /vendor/bin and /vendor/lib* and
+# subtracting everything present in our system and vendor images (recursively,
+# including egl/ hw/ soundfx/ subdirs). Adding these 13 resolves their own
+# dependencies too - the transitive closure came back empty.
+# ---------------------------------------------------------------------------
+# --- VNDK 31 libraries required by the Android-12-era vendor blobs ---
+PRODUCT_COPY_FILES += \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.gnss-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.gnss-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.light-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.light-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.memtrack-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.memtrack-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.power-V2-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.power-V2-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.security.keymint-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.security.keymint-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.security.secureclock-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.security.secureclock-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.security.sharedsecret-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.security.sharedsecret-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.soundtrigger@2.0-core.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.soundtrigger@2.0-core.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.soundtrigger@2.0.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.soundtrigger@2.0.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.vibrator-V2-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.vibrator-V2-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.system.keystore2-V1-ndk_platform.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.system.keystore2-V1-ndk_platform.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/android.system.suspend@1.0.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.system.suspend@1.0.so \
+    prebuilts/vndk/v31/arm64/arch-arm64-armv8-a/shared/vndk-core/libcurl.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libcurl.so
+
 $(call inherit-product, $(SRC_TARGET_DIR)/product/languages_full.mk)
