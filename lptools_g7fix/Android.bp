@@ -1,0 +1,32 @@
+// g7tabpro: patched build of phhusson/vendor_lptools with a cross-slot
+// group-selection fix in the "create" subcommand. See lptools.cc for the
+// rationale. Kept as a standalone module (not wired into any product
+// PRODUCT_PACKAGES) - built once with `mm` and the resulting binary is
+// extracted and bundled into the TWRP flashzip installer.
+cc_binary {
+    name: "lptools_g7fix",
+    cflags: [
+        "-Wextra",
+    ],
+    device_supported: true,
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "liblp",
+        "libsparse",
+        "libfs_mgr",
+        "libutils",
+        "libcutils",
+        "android.hardware.boot@1.1",
+        "libhidlbase",
+    ],
+    static_libs: [
+        "libdm",
+    ],
+    srcs: [
+        "lptools.cc",
+    ],
+    cppflags: [
+        "-D_FILE_OFFSET_BITS=64",
+    ],
+}
