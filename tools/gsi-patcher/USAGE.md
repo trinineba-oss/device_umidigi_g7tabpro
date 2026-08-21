@@ -124,7 +124,7 @@ Vendor is API 31 (Android 12).
 | GSI | unpatched | patched |
 |---|---|---|
 | LineageOS 20 (A13) | boots | not needed |
-| LineageOS 21 (A14) | hangs at splash | **boots** |
+| LineageOS 21 (A14) | hangs at splash | **boots** -- confirmed with an image patched by this app |
 | LineageOS 22.2 (A15) | hangs at splash | **boots** |
 | LineageOS 23.x (A16) | instant DSU revert | untested since the fix was found |
 | PeterGSI (A17, phh) | boots | not needed -- phh builds spoof the version themselves |
@@ -144,6 +144,30 @@ The app reports one clear line. The common ones:
 | `no version properties needed changing: this image already reports release 13` | Already patched, or a GSI that is genuinely Android 13. Nothing to do. |
 | `signature is N bytes but the header reserves M (wrong key size?)` | The GSI is signed with something other than the AOSP test key, so it cannot be re-signed. Use a different build. |
 | `patched build.prop is N bytes longer than the original` | A build whose version string changes length (a codename rather than a number). Rare; not patchable in place. |
+
+### The GSI instantly reverts to your normal ROM
+
+This is **not** the KeyMint failure. The version problem makes the device hang
+at the GSI splash, because it gets far enough to try to mount `/data`. An
+instant revert means the image was rejected *before* that point, so the version
+patch is not what is failing.
+
+Not all GSIs boot on this device even when correctly patched -- the vendor is
+API 31, and images several Android generations newer have been seen to
+instant-revert for reasons unrelated to KeyMint. If one image reverts, try a
+known-good one (LineageOS 21 or 22.2) before suspecting the patch.
+
+To tell a bad patch from a bad GSI, compare the patched file against a reference
+build of the same source image:
+
+```sh
+sha256sum yourfile-osver13.img
+```
+
+Patching the same input twice is deterministic, so two correct runs produce the
+same hash.
+
+### It hangs at the GSI splash
 
 If the patch succeeds but the GSI still hangs at the splash, the version fix is
 not your problem -- capture a log and look for `-64`:

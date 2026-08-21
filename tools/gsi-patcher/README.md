@@ -108,8 +108,13 @@ byte-exact rather than merely producing something that happens to parse.
 avbtool's byte for byte; accepting the vbmeta signature proves the re-signing
 does too.
 
-**The Android UI itself has not been run on a device yet** -- only the core
-logic is verified. Treat the first run as a test.
+**Confirmed on hardware (2026-08-21):** a LineageOS 21 (A14) GSI patched by the
+**app** booted under DSU on the G7 Tab Pro. That closes the gap this section
+used to warn about -- the SAF read/write path is no longer unproven.
+
+Not every GSI has worked. Some images instant-revert under DSU rather than
+booting, which is a different failure from the KeyMint splash hang and is not
+yet attributed; see [USAGE.md](USAGE.md#when-something-goes-wrong).
 
 ## Building
 
