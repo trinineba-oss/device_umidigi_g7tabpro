@@ -17,12 +17,11 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.util.zip.GZIPInputStream
 
 /**
  * Pick a GSI, pick where to write it, patch. No root, no shell, no PC.
@@ -66,7 +65,7 @@ class MainActivity : Activity() {
         })
 
         inputBtn = Button(this).apply {
-            text = "1. Choose GSI (.img or .img.gz)"
+            text = "1. Choose GSI (.img, .img.gz or .img.xz)"
             setOnClickListener { pickInput() }
         }
         root.addView(inputBtn)
@@ -129,6 +128,7 @@ class MainActivity : Activity() {
     private fun pickOutput() {
         val base = displayName(inputUri!!)
             .removeSuffix(".gz")
+            .removeSuffix(".xz")
             .removeSuffix(".img")
         val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -214,47 +214,43 @@ class MainActivity : Activity() {
     }
 
     private fun runPatch(inUri: Uri, outUri: Uri, release: String, patch: String) {
-        val name = displayName(inUri)
-        val gz = name.endsWith(".gz", ignoreCase = true)
-        if (name.endsWith(".xz", true) || name.endsWith(".7z", true)) {
-            throw IllegalArgumentException(
-                "$name is ${name.substringAfterLast('.')}-compressed; extract it to a .img first"
-            )
-        }
-
         appendLog("")
-        appendLog("== copying" + (if (gz) " and decompressing" else "") + " to destination")
         val total = sizeOf(inUri)
-        var copied = 0L
+        var written = 0L
         var lastPct = -1
 
         contentResolver.openInputStream(inUri).use { rawIn ->
             requireNotNull(rawIn) { "cannot open the selected GSI for reading" }
-            val src: InputStream = if (gz) GZIPInputStream(rawIn, 1 shl 16) else rawIn
+            // Detected from the header, not the filename: a 7z container throws
+            // here with a clear message rather than failing later as bad ext4.
+            val src = Compression.open(rawIn)
+            appendLog(
+                if (src.kind == Compression.Kind.RAW) "== copying to destination"
+                else "== decompressing (" + src.kind.label + ") to destination"
+            )
             contentResolver.openOutputStream(outUri, "wt").use { out ->
                 requireNotNull(out) { "cannot open the destination for writing" }
                 val buf = ByteArray(1 shl 20)
                 while (true) {
-                    val n = src.read(buf)
+                    val n = src.stream.read(buf)
                     if (n < 0) break
                     out.write(buf, 0, n)
-                    copied += n
-                    // With gzip the source total refers to compressed bytes, so
-                    // only show a percentage when it is meaningful.
-                    if (!gz && total > 0) {
-                        val pct = ((copied * 100) / total).toInt()
+                    written += n
+                    // Progress tracks the compressed side, which is the only
+                    // total known up front, so it works for gzip and xz too.
+                    if (total > 0) {
+                        val pct = ((src.compressedBytesRead * 100) / total)
+                            .toInt().coerceAtMost(100)
                         if (pct != lastPct) {
                             lastPct = pct
                             updateProgress(pct)
                         }
-                    } else if (copied shr 28 != (copied - n) shr 28) {
-                        appendLog("   " + fmt(copied) + " written")
                     }
                 }
                 out.flush()
             }
         }
-        appendLog("   copied " + fmt(copied))
+        appendLog("   wrote " + fmt(written))
 
         appendLog("")
         appendLog("== patching in place")

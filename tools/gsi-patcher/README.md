@@ -8,6 +8,8 @@ dm-verity hashtree.
 
 Pick the GSI, pick where to save it, press Patch. No root, no PC, no shell.
 
+Accepts `.img`, `.img.gz` and `.img.xz`, decompressing on the fly.
+
 Background: [docs/KEYMINT_OS_VERSION_FIX.md](../../docs/KEYMINT_OS_VERSION_FIX.md).
 
 ## Why this is much smaller than the shell script
@@ -48,6 +50,31 @@ across the whole image but only twice inside `build.prop`. That is why
 [`Ext4.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Ext4.kt) resolves the path
 to an inode and stays inside its extents instead of searching the image.
 
+## Input formats
+
+| format | handling |
+|---|---|
+| raw `.img` | copied straight through |
+| `.img.gz` | `GZIPInputStream` (JDK builtin) |
+| `.img.xz` | `org.tukaani:xz`, a pure-Java LZMA2 decoder -- neither the JDK nor Android ships xz support |
+| `.7z` | rejected with a clear message (see below) |
+
+The format is detected from the **magic bytes, not the file extension**.
+Renaming a download is common, and guessing from the name surfaces as a
+confusing ext4 or AVB failure much later instead of a clear message up front.
+
+`.7z` is deliberately not supported: it is an archive *container* rather than a
+compressed stream, so handling it means selecting an entry and needs
+random access to the archive, not just a decoding filter. Extract the `.img`
+first. The patcher recognises the 7z magic and says exactly that.
+
+The LZMA2 dictionary is capped at 256 MiB (`xz -9` uses 64 MiB), so a
+pathological file fails with a clear memory-limit error rather than an
+out-of-memory kill on a phone.
+
+Progress is measured on the **compressed** side, since that is the only total
+known up front -- so the bar is accurate for gzip and xz as well as raw images.
+
 ## FEC
 
 GSIs ship with FEC (Reed-Solomon) parity. There is no Reed-Solomon
@@ -67,6 +94,12 @@ the reference implementation -- as the independent oracle:
 |---|---|
 | LineageOS 22.2 (A15), 3,340,144,640 bytes | size identical, `e2fsck -fn` clean, `avbtool verify_image` passes vbmeta **and** hashtree |
 | LineageOS 23.2 (A16), 3,446,353,920 bytes | same |
+| the same A15 GSI, gzip-compressed | same |
+| the same A15 GSI, xz-compressed | same |
+
+All three input paths (raw, gzip, xz) converge on the **identical** root digest
+`60341a07...` for the same source GSI, which is what shows decompression is
+byte-exact rather than merely producing something that happens to parse.
 
 `avbtool` accepting the hashtree proves the tree implementation matches
 avbtool's byte for byte; accepting the vbmeta signature proves the re-signing
@@ -99,7 +132,14 @@ cli system.img --key testkey_rsa2048.pkcs8.der
 avbtool verify_image --image system.img --key .../testkey_rsa2048.pem
 ```
 
-Options: `--release 13`, `--patch 2025-09-05`, `--keep-fec`.
+For a compressed input, `--out` is required and the CLI decompresses to it
+first, exercising exactly the code path the app uses:
+
+```sh
+cli LineageOS-22.2-GSI.img.xz --out system.img --key testkey_rsa2048.pkcs8.der
+```
+
+Options: `--out`, `--release 13`, `--patch 2025-09-05`, `--keep-fec`.
 
 Note `avbtool verify_image` insists the file be **named after the partition**
 (`system.img`), or it fails with a misleading `FileNotFoundError`.
