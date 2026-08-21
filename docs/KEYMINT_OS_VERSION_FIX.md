@@ -134,6 +134,26 @@ test it before concluding anything.
 
 ## The fix
 
+### Automated
+
+[`tools/patch-gsi-keymint.sh`](../tools/patch-gsi-keymint.sh) does all of the below —
+decompress, patch, unshare, shrink, rebuild the AVB footer, verify:
+
+```sh
+sudo ./tools/patch-gsi-keymint.sh lineage-21.img.gz
+```
+
+For a different device, override the values your working ROM reports:
+
+```sh
+TARGET_RELEASE=12 TARGET_PATCH=2024-01-05 sudo ./tools/patch-gsi-keymint.sh gsi.img.gz
+```
+
+It locates `avbtool` and the `fec` binary itself, preserves the source image's salt,
+rollback index, algorithm and descriptor props, and re-reads the patched properties back
+out of the finished image before declaring success. The manual steps are documented below
+so the process is auditable.
+
 ### 1. Find the values your TEE accepts
 
 On the ROM that boots correctly:
