@@ -10,16 +10,24 @@ DSU, which is reversible with a reboot.
 
 ---
 
-## What's in this package
+## Getting a patched image
 
-| File | What it is |
-|---|---|
-| `lineage-21-osver13.img.gz` | LineageOS 21 (Android 14), pre-patched — **verified booting** |
-| `lineage-22-osver13.img.gz` | LineageOS 22.2 (Android 15), pre-patched — **verified booting** |
-| `INSTALL.md` | this file |
+Download any GSI and run it through the script:
 
-Both keep their real API level (34 / 35) — only the version string reported to the TEE is
+```sh
+sudo ./patch-gsi-keymint.sh lineage-21.img.gz
+```
+
+That produces `lineage-21-osver13.img.gz`, ready to install. The patched image keeps its
+real API level (34 for A14, 35 for A15) — only the version string reported to the TEE is
 changed, so the framework still behaves as its true Android version.
+
+Verified booting on this device:
+
+- **LineageOS 21** (Android 14) — AndyYan's pre-QPR2 TD build
+- **LineageOS 22.2** (Android 15) — MisterZtr's GAPPS-EXT4 build
+
+Prefer **EXT4** over EROFS variants for DSU.
 
 ---
 
