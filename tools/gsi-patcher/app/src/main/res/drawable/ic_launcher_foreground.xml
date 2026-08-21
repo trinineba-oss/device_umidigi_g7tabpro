@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shield + check: the image is re-verified, not merely edited. Artwork sits
+     inside the 72dp adaptive-icon safe zone of the 108dp viewport. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,26 L75,34 L75,53 C75,65 66,75 54,81 C42,75 33,65 33,53 L33,34 Z" />
+    <path
+        android:fillColor="#0F5132"
+        android:pathData="M45,53 l6,6 l14,-15 l5,5 l-19,20 l-11,-11 Z" />
+</vector>

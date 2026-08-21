@@ -54,6 +54,12 @@ class Avb(private val io: ImageIo) {
     val fecSize: Long
 
     init {
+        // Without this, a text file or a truncated download fails deep inside
+        // the footer read as "Negative position", which says nothing useful.
+        require(io.size > 1024L * 1024L) {
+            "this file is only " + io.size + " bytes, far too small to be a GSI " +
+                "system image"
+        }
         val footer = io.read(io.size - FOOTER_SIZE, FOOTER_SIZE)
         require(String(footer, 0, 4, Charsets.US_ASCII) == FOOTER_MAGIC) {
             "no AVB footer in the last 64 bytes: is this a GSI system image?"
@@ -61,6 +67,10 @@ class Avb(private val io: ImageIo) {
         originalImageSize = footer.be64(12)
         vbmetaOffset = footer.be64(20)
         vbmetaSize = footer.be64(28)
+        require(vbmetaOffset in 0 until io.size && vbmetaSize in 1..(1L shl 20)) {
+            "footer describes an implausible vbmeta block (offset " + vbmetaOffset +
+                ", size " + vbmetaSize + "): the image looks corrupt"
+        }
 
         blob = io.read(vbmetaOffset, vbmetaSize.toInt())
         require(String(blob, 0, 4, Charsets.US_ASCII) == VBMETA_MAGIC) { "bad vbmeta magic" }

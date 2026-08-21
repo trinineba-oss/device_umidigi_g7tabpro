@@ -22,6 +22,7 @@ import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.Locale
 
 /**
  * Pick a GSI, pick where to write it, patch. No root, no shell, no PC.
@@ -175,7 +176,7 @@ class MainActivity : Activity() {
 
     private fun fmt(bytes: Long): String =
         if (bytes < 0) "unknown size"
-        else String.format("%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
+        else String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
 
     // ----------------------------------------------------------------- worker
 
