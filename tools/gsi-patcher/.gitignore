@@ -1,0 +1,6 @@
+build/
+.gradle/
+local.properties
+# The AOSP AVB test key is published upstream; regenerate it with make-key.sh
+# rather than vendoring private-key material into this repository.
+*.der
