@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -191,6 +192,16 @@ class MainActivity : Activity() {
 
         val release = releaseField.text.toString().trim()
         val patch = patchField.text.toString().trim()
+        if (!Regex("^[0-9]{1,3}$").matches(release)) {
+            appendLog("Release must be a plain version number such as 13 -- got \"" + release + "\"")
+            resetControls()
+            return
+        }
+        if (!Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$").matches(patch)) {
+            appendLog("Security patch must look like 2025-09-05 -- got \"" + patch + "\"")
+            resetControls()
+            return
+        }
         val inUri = inputUri!!
         val outUri = outputUri!!
 
@@ -202,14 +213,7 @@ class MainActivity : Activity() {
                 appendLog("FAILED: " + (t.message ?: t.toString()))
                 appendLog("The output file is incomplete and must not be flashed.")
             } finally {
-                runOnUiThread {
-                    working = false
-                    patchBtn.isEnabled = true
-                    inputBtn.isEnabled = true
-                    outputBtn.isEnabled = true
-                    progress.visibility = View.INVISIBLE
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                }
+                resetControls()
             }
         }.start()
     }
@@ -263,8 +267,14 @@ class MainActivity : Activity() {
                     "internal storage or the SD card rather than a cloud provider"
             )
         pfd.use {
-            val readCh = FileInputStream(it.fileDescriptor).channel
-            val writeCh = FileOutputStream(it.fileDescriptor).channel
+            // Each stream gets its own dup'd descriptor. Wrapping the same fd
+            // twice meant ImageIo.close() closed it once, then again, and
+            // pfd.close() a third time -- and a double close can take out an
+            // unrelated file if the descriptor number has been reused.
+            val readPfd = ParcelFileDescriptor.dup(it.fileDescriptor)
+            val writePfd = ParcelFileDescriptor.dup(it.fileDescriptor)
+            val readCh = FileInputStream(readPfd.fileDescriptor).channel
+            val writeCh = FileOutputStream(writePfd.fileDescriptor).channel
             ImageIo(readCh, writeCh).use { io ->
                 val report = GsiPatcher.patch(
                     io,
@@ -288,10 +298,23 @@ class MainActivity : Activity() {
                 appendLog("  getprop sys.boot_completed   -> 1")
                 appendLog("  logcat | grep generateKey    -> -67, not -64")
             }
+            readPfd.close()
+            writePfd.close()
         }
     }
 
     // -------------------------------------------------------------------- ui
+
+    private fun resetControls() {
+        runOnUiThread {
+            working = false
+            patchBtn.isEnabled = true
+            inputBtn.isEnabled = true
+            outputBtn.isEnabled = true
+            progress.visibility = View.INVISIBLE
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     /** Progress chatter stays on the bar; flooding the log would bury the report. */
     private fun updateProgress(pct: Int) {

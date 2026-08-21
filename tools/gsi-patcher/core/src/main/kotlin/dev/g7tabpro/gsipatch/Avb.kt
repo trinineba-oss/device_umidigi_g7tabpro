@@ -1,9 +1,44 @@
 package dev.g7tabpro.gsipatch
 
+import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
+
+/**
+ * Encodes an RSA public key the way AVB stores it (AvbRSAPublicKeyHeader):
+ *
+ *     u32 key_num_bits, u32 n0inv, modulus[bits/8], rr[bits/8]   -- big-endian
+ *
+ * AVB only supports e=65537, so the modulus alone determines the blob. This is
+ * needed to tell whether an image's embedded key is the one we can sign with.
+ */
+internal object AvbKey {
+
+    fun encodePublicKey(modulus: BigInteger): ByteArray {
+        val numBits = modulus.bitLength()
+        val len = numBits / 8
+        val b = BigInteger.ONE.shiftLeft(32)
+        val n0inv = b.subtract(modulus.mod(b).modInverse(b))
+        val r = BigInteger.ONE.shiftLeft(numBits)
+        val rr = r.multiply(r).mod(modulus)
+        val out = ByteArray(8 + len * 2)
+        out.putBe32(0, numBits.toLong())
+        out.putBe32(4, n0inv.toLong())
+        writeFixed(modulus, out, 8, len)
+        writeFixed(rr, out, 8 + len, len)
+        return out
+    }
+
+    /** Big-endian, left-zero-padded to exactly [len] bytes. */
+    private fun writeFixed(v: BigInteger, dst: ByteArray, off: Int, len: Int) {
+        val raw = v.toByteArray()
+        val src = if (raw.size > len) raw.copyOfRange(raw.size - len, raw.size) else raw
+        java.util.Arrays.fill(dst, off, off + len, 0)
+        System.arraycopy(src, 0, dst, off + len - src.size, src.size)
+    }
+}
 
 /**
  * AVB footer / vbmeta handling, limited to what a length-preserving edit needs.
@@ -36,6 +71,8 @@ class Avb(private val io: ImageIo) {
     private val hashSize: Int
     private val sigOffset: Int
     private val sigSize: Int
+    private val pubKeyOffset: Int
+    private val pubKeySize: Int
     val algorithmType: Long
 
     /** absolute offset of the hashtree descriptor inside the vbmeta blob */
@@ -52,6 +89,10 @@ class Avb(private val io: ImageIo) {
     private val rootDigestOffset: Int
     val fecNumRoots: Long
     val fecSize: Long
+
+    /** True when the image carried a different signing key that we replaced. */
+    var signingKeyReplaced: Boolean = false
+        private set
 
     init {
         // Without this, a text file or a truncated download fails deep inside
@@ -84,6 +125,8 @@ class Avb(private val io: ImageIo) {
         sigSize = blob.be64(56).toInt()
         val descOffset = blob.be64(96).toInt()
         val descSize = blob.be64(104).toInt()
+        pubKeyOffset = blob.be64(64).toInt()
+        pubKeySize = blob.be64(72).toInt()
 
         authBlockStart = 256
         auxBlockStart = (256 + authSize).toInt()
@@ -176,6 +219,28 @@ class Avb(private val io: ImageIo) {
             requireNotNull(pkcs8Key) {
                 "image is signed (" + algorithmName() + ") but no signing key was supplied"
             }
+            val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(pkcs8Key))
+
+            // The signature is only meaningful against the public key embedded
+            // in this same vbmeta. Third-party GSIs are often signed with the
+            // maintainer's own key, and simply signing with ours would leave an
+            // image whose signature cannot verify -- silently, because the
+            // sizes still match. Replace the embedded key with ours, which is
+            // exactly what `avbtool --key` does when it rebuilds a footer.
+            val ourModulus = (key as java.security.interfaces.RSAPrivateKey).modulus
+            val ourPub = AvbKey.encodePublicKey(ourModulus)
+            val embeddedAt = auxBlockStart + pubKeyOffset
+            val embedded = blob.copyOfRange(embeddedAt, embeddedAt + pubKeySize)
+            if (!ourPub.contentEquals(embedded)) {
+                require(ourPub.size == pubKeySize) {
+                    "this image is signed with a " + (pubKeySize - 8) / 2 * 8 + "-bit key but " +
+                        "the patcher holds a " + ourModulus.bitLength() + "-bit one, so it " +
+                        "cannot be re-signed"
+                }
+                System.arraycopy(ourPub, 0, blob, embeddedAt, ourPub.size)
+                signingKeyReplaced = true
+            }
+
             val header = blob.copyOfRange(0, 256)
             val aux = blob.copyOfRange(auxBlockStart, blob.size)
 
@@ -189,7 +254,6 @@ class Avb(private val io: ImageIo) {
             // SHA256withRSA performs exactly avbtool's operation: sha256 the
             // payload, wrap it in PKCS#1 v1.5 padding with the sha256
             // DigestInfo prefix, then raw-sign.
-            val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(pkcs8Key))
             val signer = Signature.getInstance("SHA256withRSA")
             signer.initSign(key)
             signer.update(header)
@@ -200,6 +264,24 @@ class Avb(private val io: ImageIo) {
                     " (wrong key size?)"
             }
             System.arraycopy(sig, 0, blob, authBlockStart + sigOffset, sig.size)
+
+            // Verify what we just wrote, with the public half of the same key.
+            // Previously only the root digest was checked, so a signature that
+            // failed to round-trip would not surface until the device rejected
+            // the image.
+            val crt = key as? java.security.interfaces.RSAPrivateCrtKey
+            if (crt != null) {
+                val pub = KeyFactory.getInstance("RSA").generatePublic(
+                    java.security.spec.RSAPublicKeySpec(crt.modulus, crt.publicExponent)
+                )
+                val v = Signature.getInstance("SHA256withRSA")
+                v.initVerify(pub)
+                v.update(header)
+                v.update(aux)
+                check(v.verify(sig)) {
+                    "the vbmeta signature failed to verify immediately after signing"
+                }
+            }
         }
 
         io.write(vbmetaOffset, blob)

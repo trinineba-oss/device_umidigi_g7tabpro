@@ -30,7 +30,8 @@ object GsiPatcher {
         val oldRootDigest: String,
         val newRootDigest: String,
         val algorithm: String,
-        val fecDropped: Boolean
+        val fecDropped: Boolean,
+        val signingKeyReplaced: Boolean
     ) {
         override fun toString(): String = buildString {
             appendLine("partition    : " + partitionName)
@@ -39,7 +40,8 @@ object GsiPatcher {
             changes.forEach { appendLine("  changed    : " + it) }
             appendLine("root digest  : " + oldRootDigest)
             appendLine("          -> : " + newRootDigest)
-            appendLine("re-signed    : " + algorithm)
+            appendLine("re-signed    : " + algorithm +
+                if (signingKeyReplaced) " (embedded key replaced with the AOSP test key)" else "")
             append("fec          : " + if (fecDropped) "dropped (descriptor zeroed)" else "unchanged")
         }
     }
@@ -112,6 +114,21 @@ object GsiPatcher {
             throw IllegalStateException("verification failed: root digest did not stick")
         }
 
+        // Re-hash the written image and compare, the way avbtool verify_image
+        // does. Checking only the digest stored in vbmeta would pass even if
+        // the hashtree itself had been written short -- which on the device
+        // shows up as dm-verity refusing to mount, with no clue why.
+        progress.stage("Re-hashing to confirm the image verifies")
+        val (checkRoot, _) = HashTree.generate(
+            io, reread.imageSize, reread.dataBlockSize, reread.salt
+        ) { done, total -> progress.hashing(done, total) }
+        if (!checkRoot.contentEquals(reread.rootDigest)) {
+            throw IllegalStateException(
+                "verification failed: the image does not hash to its own root digest " +
+                    "(expected " + reread.rootDigest.hex() + ", got " + checkRoot.hex() + ")"
+            )
+        }
+
         return Report(
             partitionName = avb.partitionName,
             imageSize = avb.imageSize,
@@ -120,7 +137,8 @@ object GsiPatcher {
             oldRootDigest = oldRoot,
             newRootDigest = newRoot.hex(),
             algorithm = avb.algorithmName(),
-            fecDropped = options.dropFec && avb.fecSize != 0L
+            fecDropped = options.dropFec && avb.fecSize != 0L,
+            signingKeyReplaced = avb.signingKeyReplaced
         )
     }
 }

@@ -32,9 +32,7 @@ behaves as its real Android version. Only what the TEE is told changes.
 - **Time:** a few minutes for a 3 GB image. Copying and decompressing dominate;
   the hashtree pass is the shorter half. Not yet measured on this tablet.
 - **Battery:** keep it plugged in. The screen is held awake during the run.
-- **Source:** get GSIs from their maintainer (AndyYan, MisterZtr, etc.). The
-  patcher only works on images signed with the public AOSP test key, which is
-  what essentially all community GSIs use.
+- **Source:** get GSIs from their maintainer (AndyYan, MisterZtr, etc.).
 
 ## Install the app
 
@@ -142,7 +140,7 @@ The app reports one clear line. The common ones:
 | `this is a 7z archive, ...` | `.7z` is an archive containing the image, not a compressed image. Extract the `.img` first, then patch that. |
 | `the destination does not support random access` | You chose a cloud location. Save to internal storage or the SD card. |
 | `no version properties needed changing: this image already reports release 13` | Already patched, or a GSI that is genuinely Android 13. Nothing to do. |
-| `signature is N bytes but the header reserves M (wrong key size?)` | The GSI is signed with something other than the AOSP test key, so it cannot be re-signed. Use a different build. |
+| `this image is signed with a N-bit key but the patcher holds a M-bit one` | The GSI uses a larger signing key (RSA4096). Not currently re-signable. |
 | `patched build.prop is N bytes longer than the original` | A build whose version string changes length (a codename rather than a number). Rare; not patchable in place. |
 
 ### The GSI instantly reverts to your normal ROM
@@ -152,10 +150,16 @@ at the GSI splash, because it gets far enough to try to mount `/data`. An
 instant revert means the image was rejected *before* that point, so the version
 patch is not what is failing.
 
-Not all GSIs boot on this device even when correctly patched -- the vendor is
-API 31, and images several Android generations newer have been seen to
+Two causes are known. Until v2 the patcher signed with the AOSP test key while
+leaving whatever public key the image already carried, so any GSI signed by its
+maintainer came out with a signature that could not verify -- silently, because
+nothing about the sizes looked wrong. crDroid and Infinity builds are likely to
+have hit this. That is fixed; the report now says when the key was replaced.
+
+Separately, not all GSIs boot on this device even when correctly patched. The
+vendor is API 31, and images several Android generations newer have been seen to
 instant-revert for reasons unrelated to KeyMint. If one image reverts, try a
-known-good one (LineageOS 21 or 22.2) before suspecting the patch.
+known-good build (AndyYan's LineageOS 21, or 22.2) before suspecting the patch.
 
 To tell a bad patch from a bad GSI, compare the patched file against a reference
 build of the same source image:
@@ -182,6 +186,17 @@ log is usually obtainable even when it never finishes booting.
 ---
 
 ## Things worth knowing
+
+**Images signed by their maintainer are re-signed with the AOSP test key.**
+Most GSIs use the public AOSP test key, but some third-party builds are signed
+with the maintainer's own. The patcher cannot know their private key, so it
+replaces the embedded public key with the test key's and signs with that,
+leaving the image self-consistent. This is what the shell script always did
+implicitly. When it happens the report says so:
+
+```
+re-signed    : SHA256_RSA2048 (embedded key replaced with the AOSP test key)
+```
 
 **FEC is removed.** GSIs ship Reed-Solomon parity that dm-verity can use to
 repair bit-rot. The patcher does not regenerate it and instead declares the image
