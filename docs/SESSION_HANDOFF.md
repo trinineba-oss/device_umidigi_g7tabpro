@@ -118,7 +118,47 @@ Sparse `super.img` **fails at 98%**. Rebuild raw (remove `--sparse` from lpmake)
 
 ---
 
-## 3. WALL 2 — `/data` read-only on A14 (KEYMINT_NOT_CONFIGURED)
+## 3. WALL 2 — `/data` read-only on A14 (KEYMINT_NOT_CONFIGURED) — **SOLVED 2026-08-20**
+
+> **RESOLVED.** A LineageOS 21 (Android 14) GSI now boots fully on this device.
+> The fix is three lines in the GSI's `/system/build.prop` — see
+> [KEYMINT_OS_VERSION_FIX.md](KEYMINT_OS_VERSION_FIX.md) for the full writeup.
+>
+> ```
+> ro.build.version.release             14 -> 13
+> ro.build.version.release_or_codename 14 -> 13
+> ro.build.version.security_patch      -> 2025-09-05
+> ```
+> (`ro.build.version.sdk` stays at 34.) Rebuild the AVB hashtree footer afterwards.
+> Verified: `sys.boot_completed=1`, `/data` mounted, `zygote` and `pq-2-2` running,
+> `generateKey` returns the benign `-67` instead of `-64`, and the
+> "Can't get PQ service" count dropped from 147,067 to 0.
+>
+> **Two corrections to the analysis below, both of which cost time:**
+>
+> 1. **The version direction was inverted.** The note below reads
+>    `ro.keymaster.xxx.release = 13  ← should be 14`, and the attempted fix tried to
+>    force the boot image to report **14**. It is the opposite: the system must report
+>    what the TEE was already told. Measured on the working device,
+>    `ro.keymaster.xxx.release` is still **13** and unmodified — the *system* was lowered
+>    to 13 to match it. Raising boot.img to 14 would also work in principle, but boot.img
+>    is AVB-protected and much harder to change; the system side is one line.
+>    Note also that `security_patch` does **not** need to match (`2019-06-06` vs
+>    `2025-09-05` boots fine), so `release` is the property that actually matters.
+>
+> 2. **"DSU is a BAD test vehicle" is wrong**, at least on this device. DSU creates a
+>    *fresh* `userdata_gsi` (visible in logcat as
+>    `Created logical partition userdata_gsi`), which is precisely why it exposes this
+>    bug: fresh userdata forces key *generation*, and generation is what the TA rejects.
+>    The stock ROM boots daily only because it *unwraps* pre-existing keys and never asks
+>    the TEE to generate one. The fix above was developed and verified entirely under DSU.
+>
+> **Also disproven:** the TEE is **not** wiped or unprovisioned. Creating a secondary user
+> on the working ROM while watching logcat shows `generateKey` return `-67`
+> (`ROLLBACK_RESISTANCE_UNAVAILABLE`, benign), vold retry without that tag, and the key be
+> created successfully. Attestation may well be broken, but key generation was never lost.
+
+
 
 Diagnosed via DSU boot (DSU bypasses AVB, so it reaches userspace).
 

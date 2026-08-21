@@ -14,6 +14,7 @@ tree existed for this tablet.
 | microSD mounts - PC-free ROM flashing | yes |
 | adb stable at the menu | yes (TW_EXCLUDE_MTP) |
 | /data decryption in recovery | no - deliberate trade-off (FBE hang) |
+| Android 14 GSI boots (LineageOS 21) | yes - see [KEYMINT_OS_VERSION_FIX.md](docs/KEYMINT_OS_VERSION_FIX.md) |
 
 ## Hardware
 
