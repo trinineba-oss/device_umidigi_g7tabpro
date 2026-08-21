@@ -192,6 +192,50 @@ BOARD_VENDOR_CMDLINE := bootopt=64S3,32N2,64N2
 BOARD_MKBOOTIMG_ARGS += --vendor_cmdline $(BOARD_VENDOR_CMDLINE)
 BOARD_MKBOOTIMG_ARGS += --board ""
 
+# ---------------------------------------------------------------------------
+# REVIEW (2026-08-20): both values below predate the KeyMint findings in
+# docs/KEYMINT_OS_VERSION_FIX.md and should be re-evaluated. UNTESTED — this
+# is reasoning from the GSI fix, not a verified recovery change.
+#
+# What was measured on-device while solving the A14 GSI boot hang:
+#
+#   * ro.build.version.release must MATCH what the TEE was told at boot
+#     (surfaced as ro.keymaster.xxx.release, which reads 13 here). A system
+#     reporting 14 is rejected with KEYMINT_NOT_CONFIGURED (-64).
+#   * security_patch does NOT need to match at all. The device boots fine
+#     with ro.keymaster.xxx.security_patch=2019-06-06 against a system
+#     reporting 2025-09-05.
+#   * The TEE is healthy and generates keys normally — it was never "wiped".
+#
+# Implications for this recovery:
+#
+#   1. BOOT_SECURITY_PATCH := 2099-12-31 is probably unnecessary, since patch
+#      level is not what the TA validates. It may also be actively risky:
+#      BOOT_SECURITY_PATCH feeds com.android.build.boot.security_patch, which
+#      is what the TEE is told at boot, and Keymaster's rollback protection
+#      rejects DOWNGRADES. If a 2099 patch level is ever recorded, booting the
+#      normal ROM at 2024/2025 could read as a downgrade. Verify before
+#      flashing a build carrying this.
+#
+#   2. The FBE-decryption hang is plausibly the same bug in the other
+#      direction. Keymaster embeds OS_VERSION in a key's authorization list at
+#      creation and validates it on USE. /data's keys were created while the
+#      system reported 13; a twrp-12.1 recovery reports 12, so keymaster should
+#      refuse to unwrap them — which matches the observed symptom exactly
+#      ("hung trying to decrypt /data, stuck on the splash, no crash").
+#
+#      Worth trying: make the recovery report 13. PLATFORM_VERSION is
+#      .KATI_READONLY (see below), so it needs RELEASE_PLATFORM_VERSION := 13
+#      via a release config, or a prop override shipped in the recovery
+#      ramdisk. That also explains the TW_FORCE_KEYMASTER_VER dead end noted
+#      below: the flag produced an empty version because the underlying prop
+#      was unset — we now know which value it wants.
+#
+#      If that works, TW_INCLUDE_CRYPTO / TW_INCLUDE_FBE /
+#      TW_INCLUDE_FBE_METADATA_DECRYPT (disabled further down) could be
+#      re-enabled, and "/data decryption in recovery" stops being a permanent
+#      trade-off.
+# ---------------------------------------------------------------------------
 # Anti-rollback hack: pins security patch/version to absurdly future
 # values so TEE/RPMB-level downgrade rejection doesn't kick in — this
 # operates independently of the vbmeta verification flags, so disabling
