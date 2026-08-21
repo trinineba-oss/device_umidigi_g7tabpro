@@ -10,6 +10,9 @@ Pick the GSI, pick where to save it, press Patch. No root, no PC, no shell.
 
 Accepts `.img`, `.img.gz` and `.img.xz`, decompressing on the fly.
 
+**Using the app? See [USAGE.md](USAGE.md).** This file covers how it works and
+how to build it.
+
 Background: [docs/KEYMINT_OS_VERSION_FIX.md](../../docs/KEYMINT_OS_VERSION_FIX.md).
 
 ## Why this is much smaller than the shell script
