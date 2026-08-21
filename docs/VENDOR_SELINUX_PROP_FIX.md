@@ -76,25 +76,50 @@ static hang at the splash.
 Two lines appended to `/vendor/etc/selinux/vendor_property_contexts`:
 
 ```
-ro.vendor.kmosver     u:object_r:vendor_default_prop:s0
-ro.vendor.kmospatch   u:object_r:vendor_default_prop:s0
+ro.vendor.kmosver     u:object_r:vendor_mtk_default_prop:s0
+ro.vendor.kmospatch   u:object_r:vendor_mtk_default_prop:s0
 ```
 
-`vendor_default_prop` is the right type for three independent reasons, all
-verified against the shipped policy:
+`vendor_mtk_default_prop` is the right type, verified against the shipped policy:
 
-1. It is **already granted to this exact domain** —
-   `allow hal_keymint_default vendor_default_prop:file { getattr map open read };`
-2. It carries the `property_type` attribute
-   (`type vendor_default_prop, property_type, vendor_property_type, vendor_internal_property_type;`),
-   and the policy has `allow init property_type:property_service set;`, so init
-   may set it from `/vendor/build.prop`.
+```
+type vendor_mtk_default_prop, property_type, vendor_property_type,
+     vendor_restricted_property_type, mtk_core_property_type;
+```
+
+1. `property_type` means `allow init property_type:property_service set;`
+   applies, so init may set it from `/vendor/build.prop`.
+2. `mtk_core_property_type` means
+   `allow domain mtk_core_property_type:file { getattr map open read };`
+   applies — readable by **every** domain, so `hal_keymint_default` can read it.
 3. It is already declared in the precompiled policy, so **no sepolicy rebuild is
    required** — this is a two-line text change inside the vendor image.
 
-Do not invent a new type here. A new type would have to be declared in policy,
-which means rebuilding and reflashing sepolicy; there is no reason to when an
+Do not invent a new type. A new type would have to be declared in policy, which
+means rebuilding and reflashing sepolicy; there is no reason to when an
 already-granted type exists.
+
+### Why not `vendor_default_prop`
+
+`vendor_default_prop` also works *for the HAL* —
+`allow hal_keymint_default vendor_default_prop:file { getattr map open read };`
+is an explicit grant. It was the first choice and is the more narrowly-scoped
+type. It was rejected because it is `vendor_internal_property_type` and the
+`shell` domain has **no read access** to it:
+
+```
+$ sesearch --allow -s shell -t vendor_default_prop -c file sepolicy
+              (no rules)
+```
+
+That means `adb shell getprop ro.vendor.kmosver` prints **empty even when the
+fix is working perfectly** — a successful boot and a failed one look identical
+from the shell, which is a very expensive thing to get wrong when each test
+costs a flash cycle. `vendor_mtk_default_prop` is world-readable, so `getprop`
+is a real check.
+
+The two values are an Android version and a patch date, both already public in
+`build.prop`, so world-readable leaks nothing.
 
 ## Building the image
 
@@ -118,14 +143,29 @@ Verified in the finished artifact, not just at the mount point:
 
 ```
 Partition Name: vendor      Salt: 15aa12b7…
-Root Digest:    32dd63a464973544616f3a14ec4df3f787f64fa93b164f12e9448f0215bb07a9
+Root Digest:    b9faed28a4b35930eac82c8aca4b170558acb3709be5879e7265e7cbe9aa1928
 vbmeta: Successfully verified footer and NONE vbmeta struct in vendor.img
 vendor: Successfully verified sha256 hashtree of vendor.img for image of 990183424 bytes
 ```
 
+## Completeness check
+
+The HAL binary and `libkeymint.so` between them reference 12 property names:
+
+```
+ro.boot.vbmeta.device_state   ro.product.brand         ro.product.name
+ro.boot.vbmeta.digest         ro.product.device        ro.vendor.build.security_patch
+ro.boot.verifiedbootstate     ro.product.manufacturer  ro.vendor.kmospatch
+ro.product.board              ro.product.model         ro.vendor.kmosver
+```
+
+Only the last two are new. The other ten are stock AOSP names that the
+*unpatched* HAL already read successfully on firmware that boots, so none of
+them can be a second instance of this bug.
+
 ## Flashing (untested — read this first)
 
-The rebuilt hashtree has a **new root digest** (`32dd63a4…`, stock is
+The rebuilt hashtree has a **new root digest** (`b9faed28…`, stock is
 `505d92a5…`). Vendor's hashtree descriptor lives in the chained `vbmeta_vendor`
 partition, so dm-verity must be switched off or verification fails:
 

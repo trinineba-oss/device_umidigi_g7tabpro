@@ -37,13 +37,19 @@ if sudo grep -q "kmosver" "$MNT/$VPC"; then
 else
   sudo tee -a "$MNT/$VPC" >/dev/null <<'EOF'
 
-# KeyMint OS-version redirect (see docs/KEYMINT_OS_VERSION_FIX.md).
+# KeyMint OS-version redirect (see docs/VENDOR_SELINUX_PROP_FIX.md).
 # libkeymint.so is patched to read these instead of ro.build.version.*.
-# vendor_default_prop is used because sepolicy grants hal_keymint_default
-# read on it, while unlabeled props fall back to default_prop, which it
-# is NOT allowed to read -> property_get returns empty -> early_hal fails.
-ro.vendor.kmosver     u:object_r:vendor_default_prop:s0
-ro.vendor.kmospatch   u:object_r:vendor_default_prop:s0
+# Unlabeled props fall back to default_prop, which hal_keymint_default is NOT
+# allowed to read -> property_get returns empty -> early_hal fails -> watchdog
+# bootloop. vendor_mtk_default_prop is used because it carries both:
+#   property_type        -> init may set it from /vendor/build.prop
+#   mtk_core_property_type -> "allow domain mtk_core_property_type:file ..."
+# i.e. readable by EVERY domain, so both the HAL and the adb shell can read it
+# and `getprop ro.vendor.kmosver` is a valid check. vendor_default_prop also
+# works for the HAL but is NOT readable by shell, which makes a successful fix
+# look identical to a failed one.
+ro.vendor.kmosver     u:object_r:vendor_mtk_default_prop:s0
+ro.vendor.kmospatch   u:object_r:vendor_mtk_default_prop:s0
 EOF
 fi
 AFTER=$(sudo stat -c%s "$MNT/$VPC")
