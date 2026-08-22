@@ -61,6 +61,9 @@ object GsiPatcher {
      * A14 and A15 GSIs do not carry these duplicates, which is why single-file
      * patching appeared to work for them.
      */
+    /** Exposed so [Preflight] checks exactly the set that gets patched. */
+    fun buildPropPaths(): List<String> = BUILD_PROP_PATHS
+
     private val BUILD_PROP_PATHS = listOf(
         "/system/build.prop",
         "/build.prop",
@@ -84,7 +87,18 @@ object GsiPatcher {
         // on BUILD_PROP_PATHS. Missing ones are normal and skipped silently.
         val found = LinkedHashMap<String, Long>()
         for (candidate in BUILD_PROP_PATHS) {
-            val ino = fs.lookup(candidate) ?: continue
+            // lookup throws rather than returning null when a path component is
+            // something it cannot walk -- a symlink, or an old block-mapped
+            // inode. GSIs routinely symlink /product -> /system/product, so the
+            // alternate spellings in this list hit that. Such a path is not a
+            // prop file we can patch in place, and the canonical spelling is
+            // also in the list, so treat it as absent rather than failing the
+            // whole patch.
+            val ino = try {
+                fs.lookup(candidate)
+            } catch (e: Exception) {
+                null
+            } ?: continue
             found[candidate] = ino
         }
         if (found.isEmpty()) throw IllegalStateException(
