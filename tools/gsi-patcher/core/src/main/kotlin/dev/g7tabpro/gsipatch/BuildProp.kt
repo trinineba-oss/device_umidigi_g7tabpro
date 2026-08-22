@@ -21,6 +21,26 @@ object BuildProp {
     )
     const val KEY_PATCH = "ro.build.version.security_patch"
 
+    /**
+     * The same property exists in partition-scoped forms -- ro.system.*,
+     * ro.product.*, ro.system_ext.* -- and they matter, because ro. properties
+     * are write-once and whichever file init loads first wins. An Android 16
+     * GSI carries `ro.build.version.release` in BOTH /system/build.prop and
+     * /system/product/etc/build.prop; patching only the former leaves the
+     * runtime reporting the unpatched value and KeyMint still returns
+     * KEYMINT_NOT_CONFIGURED.
+     *
+     * Matching on the suffix catches every scoped variant, including
+     * `ro.system.build.version.release` which an exactly-anchored pattern
+     * misses even inside the file it is already editing.
+     */
+    private fun isReleaseKey(key: String) =
+        key.endsWith(".build.version.release") ||
+            key.endsWith(".build.version.release_or_codename")
+
+    private fun isPatchKey(key: String) =
+        key.endsWith(".build.version.security_patch")
+
     class Result(
         val bytes: ByteArray,
         val changes: List<String>,
@@ -45,8 +65,8 @@ object BuildProp {
             val key = line.substring(0, eq)
             val value = line.substring(eq + 1)
             val newValue = when {
-                key in KEYS_RELEASE -> targetRelease
-                key == KEY_PATCH -> targetPatch
+                isReleaseKey(key) -> targetRelease
+                isPatchKey(key) -> targetPatch
                 else -> null
             } ?: continue
             if (value == newValue) continue

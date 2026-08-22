@@ -25,7 +25,7 @@ object GsiPatcher {
     class Report(
         val partitionName: String,
         val imageSize: Long,
-        val buildPropPath: String,
+        val buildPropPaths: List<String>,
         val changes: List<String>,
         val oldRootDigest: String,
         val newRootDigest: String,
@@ -36,7 +36,7 @@ object GsiPatcher {
         override fun toString(): String = buildString {
             appendLine("partition    : " + partitionName)
             appendLine("image size   : " + imageSize)
-            appendLine("build.prop   : " + buildPropPath)
+            buildPropPaths.forEach { appendLine("build.prop   : " + it) }
             changes.forEach { appendLine("  changed    : " + it) }
             appendLine("root digest  : " + oldRootDigest)
             appendLine("          -> : " + newRootDigest)
@@ -46,7 +46,29 @@ object GsiPatcher {
         }
     }
 
-    private val BUILD_PROP_PATHS = listOf("/system/build.prop", "/build.prop")
+    /**
+     * Every build.prop that can define the version properties -- not just the
+     * first one found.
+     *
+     * ro. properties are write-once, so if any partition's build.prop sets
+     * `ro.build.version.release` before /system/build.prop is read, that value
+     * wins and patching /system alone silently achieves nothing. Android 16
+     * GSIs hit this: /system/product/etc/build.prop sets the generic
+     * `ro.build.version.release` as well as its own ro.product.* form, and the
+     * device boots reporting the unpatched version while the file on disk
+     * plainly reads the patched one.
+     *
+     * A14 and A15 GSIs do not carry these duplicates, which is why single-file
+     * patching appeared to work for them.
+     */
+    private val BUILD_PROP_PATHS = listOf(
+        "/system/build.prop",
+        "/build.prop",
+        "/system/product/etc/build.prop",
+        "/product/etc/build.prop",
+        "/system/system_ext/etc/build.prop",
+        "/system_ext/etc/build.prop"
+    )
 
     fun patch(io: ImageIo, options: Options, pkcs8Key: ByteArray?, progress: Progress = Silent): Report {
         progress.stage("Reading AVB footer")
@@ -58,30 +80,36 @@ object GsiPatcher {
         progress.stage("Opening filesystem")
         val fs = Ext4(io)
 
-        var path: String? = null
-        var ino: Long? = null
+        // Collect every build.prop present, not the first match: see the note
+        // on BUILD_PROP_PATHS. Missing ones are normal and skipped silently.
+        val found = LinkedHashMap<String, Long>()
         for (candidate in BUILD_PROP_PATHS) {
-            val found = fs.lookup(candidate)
-            if (found != null) {
-                path = candidate
-                ino = found
-                break
-            }
+            val ino = fs.lookup(candidate) ?: continue
+            found[candidate] = ino
         }
-        if (ino == null) throw IllegalStateException(
+        if (found.isEmpty()) throw IllegalStateException(
             "build.prop not found (looked in " + BUILD_PROP_PATHS.joinToString(", ") + ")"
         )
 
-        progress.stage("Patching " + path)
-        val original = fs.readFile(ino)
-        val result = BuildProp.patch(original, options.targetRelease, options.targetPatch)
-        if (result.replacements == 0) {
+        var totalReplacements = 0
+        val patchedPaths = ArrayList<String>()
+        val allChanges = ArrayList<String>()
+        for ((p, ino) in found) {
+            progress.stage("Patching " + p)
+            val original = fs.readFile(ino)
+            val result = BuildProp.patch(original, options.targetRelease, options.targetPatch)
+            if (result.replacements == 0) continue   // this file defines none of them
+            fs.writeFileInPlace(ino, result.bytes)
+            totalReplacements += result.replacements
+            patchedPaths.add(p)
+            result.changes.forEach { allChanges.add(p + " " + it) }
+        }
+        if (totalReplacements == 0) {
             throw IllegalStateException(
                 "no version properties needed changing: this image already reports release " +
                     options.targetRelease
             )
         }
-        fs.writeFileInPlace(ino, result.bytes)
 
         progress.stage("Recomputing dm-verity hashtree")
         val (newRoot, tree) = HashTree.generate(
@@ -96,17 +124,38 @@ object GsiPatcher {
         // steps above returned without throwing.
         progress.stage("Verifying")
         val verifyFs = Ext4(io)
-        val vIno = verifyFs.lookup(path!!)
-            ?: throw IllegalStateException("verification: build.prop vanished")
-        val text = String(verifyFs.readFile(vIno), Charsets.UTF_8)
-        for (key in BuildProp.KEYS_RELEASE) {
-            val expected = key + "=" + options.targetRelease
-            if (text.lineSequence().none { it == expected } && text.contains(key + "=")) {
-                throw IllegalStateException("verification failed: " + key + " is not " + options.targetRelease)
+        // Re-read every file that was patched. A stale value left in any one of
+        // them is enough to make the whole exercise pointless, since whichever
+        // init reads first wins.
+        var sawPatch = false
+        for (p in found.keys) {
+            val vIno = verifyFs.lookup(p)
+                ?: throw IllegalStateException("verification: " + p + " vanished")
+            val text = String(verifyFs.readFile(vIno), Charsets.UTF_8)
+            for (line in text.lineSequence()) {
+                val eq = line.indexOf('=')
+                if (eq <= 0) continue
+                val key = line.substring(0, eq)
+                val value = line.substring(eq + 1)
+                if ((key.endsWith(".build.version.release") ||
+                        key.endsWith(".build.version.release_or_codename")) &&
+                    value != options.targetRelease
+                ) {
+                    throw IllegalStateException(
+                        "verification failed: " + p + " still has " + key + "=" + value
+                    )
+                }
+                if (key.endsWith(".build.version.security_patch")) {
+                    if (value != options.targetPatch) {
+                        throw IllegalStateException(
+                            "verification failed: " + p + " still has " + key + "=" + value
+                        )
+                    }
+                    sawPatch = true
+                }
             }
         }
-        val expectedPatch = BuildProp.KEY_PATCH + "=" + options.targetPatch
-        if (text.lineSequence().none { it == expectedPatch }) {
+        if (!sawPatch) {
             throw IllegalStateException("verification failed: security_patch was not applied")
         }
         val reread = Avb(io)
@@ -132,8 +181,8 @@ object GsiPatcher {
         return Report(
             partitionName = avb.partitionName,
             imageSize = avb.imageSize,
-            buildPropPath = path,
-            changes = result.changes,
+            buildPropPaths = patchedPaths,
+            changes = allChanges,
             oldRootDigest = oldRoot,
             newRootDigest = newRoot.hex(),
             algorithm = avb.algorithmName(),
