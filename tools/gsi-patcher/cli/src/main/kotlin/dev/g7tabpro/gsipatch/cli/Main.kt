@@ -3,6 +3,7 @@ package dev.g7tabpro.gsipatch.cli
 import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
+import dev.g7tabpro.gsipatch.Preflight
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -35,7 +36,10 @@ private fun run(argv: Array<String>) {
                 "                [--key key.pkcs8.der] [--keep-fec]\n" +
                 "\n" +
                 "  --out is required for compressed input; without it a raw image is\n" +
-                "  patched in place."
+                "  patched in place.\n" +
+                "\n" +
+                "  --preflight checks an image and exits without modifying it; the exit\n" +
+                "  code is non-zero when a blocker is found."
         )
         exitProcess(2)
     }
@@ -45,6 +49,7 @@ private fun run(argv: Array<String>) {
     var patch = "2025-09-05"
     var keyFile: File? = null
     var dropFec = true
+    var preflightOnly = false
 
     var i = 1
     while (i < argv.size) {
@@ -54,6 +59,7 @@ private fun run(argv: Array<String>) {
             "--patch" -> patch = argv[++i]
             "--key" -> keyFile = File(argv[++i])
             "--keep-fec" -> dropFec = false
+            "--preflight" -> preflightOnly = true
             else -> {
                 System.err.println("unknown argument: " + argv[i]); exitProcess(2)
             }
@@ -65,6 +71,23 @@ private fun run(argv: Array<String>) {
     }
 
     val started = System.currentTimeMillis()
+
+    if (preflightOnly) {
+        RandomAccessFile(input, "r").use { raf ->
+            ImageIo(raf.channel).use { io ->
+                var last = -1
+                val result = Preflight.check(io, release, patch) { done, total ->
+                    val pct = if (total == 0L) 100 else ((done * 100) / total).toInt()
+                    if (pct != last && pct % 10 == 0) {
+                        print("\r    scanning " + pct + "%"); System.out.flush(); last = pct
+                    }
+                }
+                println("\r                    ")
+                println(result)
+                exitProcess(if (result.willLikelyBoot) 0 else 1)
+            }
+        }
+    }
 
     // ---- decompress / copy stage
     val target: File
@@ -132,6 +155,17 @@ private fun run(argv: Array<String>) {
             )
             println()
             println(report)
+        }
+    }
+
+    // The patch verifies its own work, but preflight is the check that answers
+    // "will this actually boot" -- it re-reads every prop file the patcher knows
+    // about and sweeps the rest of the image for anything left behind.
+    println()
+    println("==> pre-flight")
+    RandomAccessFile(target, "r").use { raf ->
+        ImageIo(raf.channel).use { io ->
+            println(Preflight.check(io, release, patch).toString().prependIndent("    "))
         }
     }
     println("done in " + ((System.currentTimeMillis() - started) / 1000) + "s")

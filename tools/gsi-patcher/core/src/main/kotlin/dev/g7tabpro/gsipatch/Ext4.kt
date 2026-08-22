@@ -1,6 +1,28 @@
 package dev.g7tabpro.gsipatch
 
 /**
+ * Container checks that must run *before* anything reads the AVB footer.
+ *
+ * A sparse image has no footer at all, so without this it fails as "no AVB
+ * footer in the last 64 bytes", which reads like a corrupt download rather than
+ * a file that simply needs converting first.
+ */
+object ImageFormat {
+
+    private const val SPARSE_MAGIC = 0xED26FF3AL
+
+    fun requireRaw(io: ImageIo) {
+        // Too small to classify; Avb reports on those with a better message.
+        if (io.size < 4096) return
+        val head = io.read(0, 4)
+        require(head.le32(0) != SPARSE_MAGIC) {
+            "this is an Android sparse image, not a raw one: convert it with simg2img " +
+                "first, then patch the result"
+        }
+    }
+}
+
+/**
  * Minimal read/write ext4 support: just enough to resolve a path to an inode,
  * read that file, and write it back at the same length.
  *
@@ -22,7 +44,23 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
 
     init {
         val sb = io.read(base + 1024, 1024)
-        require(sb.le16(0x38) == 0xEF53) { "not an ext4 filesystem (magic != 0xEF53)" }
+        if (sb.le16(0x38) != 0xEF53) {
+            // Name the format when we can. "not an ext4 filesystem" sends people
+            // hunting for a corrupt download when the real answer is that the
+            // image needs converting, or is a layout this tool cannot patch.
+            val head = io.read(base, 8)
+            throw IllegalArgumentException(
+                when {
+                    head.le32(0) == 0xED26FF3AL ->
+                        "this is an Android sparse image, not a raw one: convert it with " +
+                            "simg2img first, then patch the result"
+                    sb.le32(0) == 0xE0F5E1E2L ->
+                        "this image uses EROFS, and the patcher only handles ext4 GSIs: " +
+                            "look for an EXT4 build of the same GSI"
+                    else -> "not an ext4 filesystem (superblock magic is not 0xEF53)"
+                }
+            )
+        }
         blockSize = 1024 shl sb.le32(0x18).toInt()
         inodesPerGroup = sb.le32(0x28).toInt()
         inodeSize = sb.le16(0x58).let { if (it == 0) 128 else it }

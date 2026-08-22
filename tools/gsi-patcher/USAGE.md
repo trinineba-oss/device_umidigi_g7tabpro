@@ -54,11 +54,19 @@ picker.
    `LineageOS-22.2-...-osver13.img`. Save it somewhere on internal storage or
    the SD card. **Not** Drive/OneDrive or any cloud location -- the patcher needs
    random access to the file, which cloud providers do not offer.
-3. **Check the two fields.** Defaults are `13` and `2025-09-05`, which are
-   correct for this tablet. Leave them alone unless you know you need otherwise
-   (see [Other devices](#other-devices)).
+3. **Check the two fields.** The release defaults to whatever Android version
+   this device currently reports, which is the value its TEE will accept. On the
+   G7 Tab Pro running LineageOS 20 that is `13`. Leave it alone unless you know
+   otherwise (see [Other devices](#other-devices)). One caveat: run the app from
+   inside a booted GSI and it will detect *that* GSI's version, not the stock
+   one -- patch from your normal ROM.
 4. **Patch.** The progress bar covers the copy, then the hashtree pass. The log
-   shows each property it changed and the old and new root digest.
+   shows each property it changed and the old and new root digest, and finishes
+   with a pre-flight report (below).
+
+There is also a **Check an image** button, which runs the same pre-flight against
+any uncompressed `.img` without modifying it. Useful for judging an image you
+patched earlier, or one from someone else, before spending a DSU cycle on it.
 
 Success looks like this:
 
@@ -82,6 +90,24 @@ file, and all of them have to match.
 
 If anything goes wrong the app says `FAILED:` with the reason and tells you the
 output file must not be flashed. Delete it and start again.
+
+### The pre-flight report
+
+Every patch ends with one, and it is the thing to read before installing:
+
+- **BLOCKER** -- a version property in a prop file still has the wrong value.
+  Since `ro.` properties are write-once and whichever file init reads first
+  wins, one stale entry is enough to make the whole patch pointless. Do not
+  install an image with blockers.
+- **warn** -- a version string was found somewhere else in the image. This is
+  normally harmless: known-good images that boot carry inert copies inside APKs
+  or in free space. It only matters if the image fails to boot reporting the
+  wrong version, in which case one of these may live in a prop file the tool
+  does not yet know to patch.
+- **info** -- the image's API level, whether dm-verity hashes correctly, and a
+  note if `ro.adb.secure=1` on a non-debuggable build (such an image gives you
+  no adb if it hangs before `/data` mounts, which turns any failure into a black
+  box).
 
 ---
 
@@ -137,6 +163,8 @@ The app reports one clear line. The common ones:
 |---|---|
 | `this file is only N bytes, far too small to be a GSI system image` | Wrong file -- you picked a text file, or the download is truncated. |
 | `no AVB footer in the last 64 bytes: is this a GSI system image?` | Not a GSI `system.img`. A `boot.img`, `vendor.img` or a full-ROM archive will do this. |
+| `this is an Android sparse image, not a raw one` | Run it through `simg2img` first, then patch the result. |
+| `this image uses EROFS` | Only ext4 GSIs can be patched in place. Look for an EXT4 build of the same GSI. |
 | `this is a 7z archive, ...` | `.7z` is an archive containing the image, not a compressed image. Extract the `.img` first, then patch that. |
 | `the destination does not support random access` | You chose a cloud location. Save to internal storage or the SD card. |
 | `no version properties needed changing: this image already reports release 13` | Already patched, or a GSI that is genuinely Android 13. Nothing to do. |

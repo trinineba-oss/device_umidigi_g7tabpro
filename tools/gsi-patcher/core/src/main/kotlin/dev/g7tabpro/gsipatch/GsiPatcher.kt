@@ -74,6 +74,7 @@ object GsiPatcher {
     )
 
     fun patch(io: ImageIo, options: Options, pkcs8Key: ByteArray?, progress: Progress = Silent): Report {
+        ImageFormat.requireRaw(io)
         progress.stage("Reading AVB footer")
         val avb = Avb(io)
         require(avb.dataBlockSize == avb.hashBlockSize) {

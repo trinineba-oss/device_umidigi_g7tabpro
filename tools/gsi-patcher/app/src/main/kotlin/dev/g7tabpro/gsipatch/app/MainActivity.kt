@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.view.View
@@ -21,6 +22,7 @@ import android.widget.TextView
 import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
+import dev.g7tabpro.gsipatch.Preflight
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.Locale
@@ -45,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var inputBtn: Button
     private lateinit var outputBtn: Button
     private lateinit var patchBtn: Button
+    private lateinit var checkBtn: Button
     private lateinit var releaseField: EditText
     private lateinit var patchField: EditText
     private lateinit var progress: ProgressBar
@@ -82,7 +85,11 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(TextView(this).apply { text = "Report release " })
         releaseField = EditText(this).apply {
-            setText("13")
+            // The value the TEE will accept is the one the device's own ROM
+            // reports, so default to that instead of hardcoding this tablet's.
+            // Editable, because reading it from inside a booted GSI would give
+            // that GSI's version rather than the stock one.
+            setText(Build.VERSION.RELEASE ?: "13")
             minWidth = (64 * resources.displayMetrics.density).toInt()
         }
         row.addView(releaseField)
@@ -90,6 +97,13 @@ class MainActivity : Activity() {
         patchField = EditText(this).apply { setText("2025-09-05") }
         row.addView(patchField)
         root.addView(row)
+
+        checkBtn = Button(this).apply {
+            text = "Check an image (no changes)"
+            isEnabled = false
+            setOnClickListener { startCheck() }
+        }
+        root.addView(checkBtn)
 
         patchBtn = Button(this).apply {
             text = "3. Patch"
@@ -149,6 +163,7 @@ class MainActivity : Activity() {
                 inputUri = uri
                 inputBtn.text = "1. GSI: " + displayName(uri)
                 outputBtn.isEnabled = true
+                checkBtn.isEnabled = true
                 appendLog("input: " + displayName(uri) + "  (" + fmt(sizeOf(uri)) + ")")
             }
             REQ_OUTPUT -> {
@@ -185,6 +200,7 @@ class MainActivity : Activity() {
         if (working) return
         working = true
         patchBtn.isEnabled = false
+        checkBtn.isEnabled = false
         inputBtn.isEnabled = false
         outputBtn.isEnabled = false
         progress.visibility = View.VISIBLE
@@ -212,6 +228,56 @@ class MainActivity : Activity() {
                 appendLog("")
                 appendLog("FAILED: " + (t.message ?: t.toString()))
                 appendLog("The output file is incomplete and must not be flashed.")
+            } finally {
+                resetControls()
+            }
+        }.start()
+    }
+
+    /** Preflight an image without touching it. Answers "will this boot?" for free. */
+    private fun startCheck() {
+        if (working) return
+        val inUri = inputUri ?: return
+        val release = releaseField.text.toString().trim()
+        val patch = patchField.text.toString().trim()
+        working = true
+        checkBtn.isEnabled = false
+        patchBtn.isEnabled = false
+        progress.visibility = View.VISIBLE
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        Thread {
+            try {
+                // Preflight needs random access, so a compressed file cannot be
+                // checked where it sits -- say so rather than failing later with
+                // a misleading "no AVB footer".
+                val kind = contentResolver.openInputStream(inUri).use { raw ->
+                    requireNotNull(raw) { "cannot open the selected image" }
+                    Compression.open(raw).kind
+                }
+                if (kind != Compression.Kind.RAW) {
+                    throw IllegalArgumentException(
+                        "this file is " + kind.label + "-compressed; checking reads the image " +
+                            "directly, so select an uncompressed .img (or patch it and the " +
+                            "finished image is checked automatically)"
+                    )
+                }
+                appendLog("")
+                appendLog("== pre-flight on " + displayName(inUri))
+                val pfd = contentResolver.openFileDescriptor(inUri, "r")
+                    ?: throw IllegalStateException("cannot read that location directly")
+                pfd.use {
+                    val ch = FileInputStream(it.fileDescriptor).channel
+                    ImageIo(ch).use { io ->
+                        appendLog(
+                            Preflight.check(io, release, patch) { d, t ->
+                                updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt())
+                            }.toString()
+                        )
+                    }
+                }
+            } catch (t: Throwable) {
+                appendLog("FAILED: " + (t.message ?: t.toString()))
             } finally {
                 resetControls()
             }
@@ -294,7 +360,15 @@ class MainActivity : Activity() {
                 appendLog("")
                 appendLog(report.toString())
                 appendLog("")
-                appendLog("DONE. Install with DSU Sideloader, then check:")
+                appendLog("")
+                appendLog("== pre-flight on the finished image")
+                appendLog(
+                    Preflight.check(io, release, patch) { d, t ->
+                        updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt())
+                    }.toString()
+                )
+                appendLog("")
+                appendLog("Install with DSU Sideloader, then check:")
                 appendLog("  getprop sys.boot_completed   -> 1")
                 appendLog("  logcat | grep generateKey    -> -67, not -64")
             }
@@ -308,7 +382,8 @@ class MainActivity : Activity() {
     private fun resetControls() {
         runOnUiThread {
             working = false
-            patchBtn.isEnabled = true
+            patchBtn.isEnabled = outputUri != null
+            checkBtn.isEnabled = inputUri != null
             inputBtn.isEnabled = true
             outputBtn.isEnabled = true
             progress.visibility = View.INVISIBLE

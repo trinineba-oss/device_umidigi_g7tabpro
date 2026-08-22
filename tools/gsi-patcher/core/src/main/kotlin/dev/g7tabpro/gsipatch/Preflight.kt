@@ -112,6 +112,7 @@ object Preflight {
     ): Result {
         val findings = ArrayList<Finding>()
 
+        ImageFormat.requireRaw(io)
         val avb = Avb(io)
         val fs = Ext4(io)
 
