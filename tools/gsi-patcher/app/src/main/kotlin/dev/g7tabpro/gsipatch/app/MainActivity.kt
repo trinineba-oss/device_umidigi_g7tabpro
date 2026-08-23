@@ -14,14 +14,17 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import dev.g7tabpro.gsipatch.Compatibility
 import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
+import dev.g7tabpro.gsipatch.DeviceFacts
 import dev.g7tabpro.gsipatch.Preflight
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -48,6 +51,8 @@ class MainActivity : Activity() {
     private lateinit var outputBtn: Button
     private lateinit var patchBtn: Button
     private lateinit var checkBtn: Button
+    private lateinit var adbBox: CheckBox
+    private lateinit var device: DeviceFacts
     private lateinit var releaseField: EditText
     private lateinit var patchField: EditText
     private lateinit var progress: ProgressBar
@@ -55,6 +60,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        device = DeviceProbe.read()
 
         val pad = (16 * resources.displayMetrics.density).toInt()
         val root = LinearLayout(this).apply {
@@ -85,11 +92,11 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(TextView(this).apply { text = "Report release " })
         releaseField = EditText(this).apply {
-            // The value the TEE will accept is the one the device's own ROM
-            // reports, so default to that instead of hardcoding this tablet's.
-            // Editable, because reading it from inside a booted GSI would give
-            // that GSI's version rather than the stock one.
-            setText(Build.VERSION.RELEASE ?: "13")
+            // ro.keymaster.*.release is the version the bootloader handed the
+            // TEE, which is exactly what KeyMint compares against. Preferring it
+            // over Build.VERSION.RELEASE also stays correct when the app is run
+            // from inside a booted GSI.
+            setText(Compatibility.recommendedTargetRelease(device) ?: "13")
             minWidth = (64 * resources.displayMetrics.density).toInt()
         }
         row.addView(releaseField)
@@ -104,6 +111,12 @@ class MainActivity : Activity() {
             setOnClickListener { startCheck() }
         }
         root.addView(checkBtn)
+
+        adbBox = CheckBox(this).apply {
+            text = "Keep adb usable if it fails to boot (turns off adb auth)"
+            isChecked = false
+        }
+        root.addView(adbBox)
 
         patchBtn = Button(this).apply {
             text = "3. Patch"
@@ -129,6 +142,10 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this)
         scroll.addView(root)
         setContentView(scroll)
+
+        appendLog("device: TEE expects Android " + (device.teeRelease ?: "unknown") +
+            ", vendor API " + (device.vendorApiLevel?.toString() ?: "?") +
+            ", KeyMint " + (device.keymintAidlVersion?.let { "V" + it } ?: "version unreadable"))
     }
 
     // ---------------------------------------------------------------- pickers
@@ -270,9 +287,11 @@ class MainActivity : Activity() {
                     val ch = FileInputStream(it.fileDescriptor).channel
                     ImageIo(ch).use { io ->
                         appendLog(
-                            Preflight.check(io, release, patch) { d, t ->
-                                updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt())
-                            }.toString()
+                            Preflight.check(
+                                io, release, patch,
+                                { d, t -> updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt()) },
+                                device, displayName(inUri)
+                            ).toString()
                         )
                     }
                 }
@@ -344,7 +363,7 @@ class MainActivity : Activity() {
             ImageIo(readCh, writeCh).use { io ->
                 val report = GsiPatcher.patch(
                     io,
-                    GsiPatcher.Options(release, patch, dropFec = true),
+                    GsiPatcher.Options(release, patch, dropFec = true, enableAdb = adbBox.isChecked),
                     key,
                     object : GsiPatcher.Progress {
                         override fun stage(message: String) {
@@ -363,9 +382,11 @@ class MainActivity : Activity() {
                 appendLog("")
                 appendLog("== pre-flight on the finished image")
                 appendLog(
-                    Preflight.check(io, release, patch) { d, t ->
-                        updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt())
-                    }.toString()
+                    Preflight.check(
+                        io, release, patch,
+                        { d, t -> updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt()) },
+                        device, displayName(outUri)
+                    ).toString()
                 )
                 appendLog("")
                 appendLog("Install with DSU Sideloader, then check:")

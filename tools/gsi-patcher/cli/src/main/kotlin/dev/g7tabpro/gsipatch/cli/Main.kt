@@ -1,6 +1,7 @@
 package dev.g7tabpro.gsipatch.cli
 
 import dev.g7tabpro.gsipatch.Compression
+import dev.g7tabpro.gsipatch.DeviceFacts
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
 import dev.g7tabpro.gsipatch.Preflight
@@ -39,7 +40,11 @@ private fun run(argv: Array<String>) {
                 "  patched in place.\n" +
                 "\n" +
                 "  --preflight checks an image and exits without modifying it; the exit\n" +
-                "  code is non-zero when a blocker is found."
+                "  code is non-zero when a blocker is found.\n" +
+                "  --enable-adb turns off adb authorisation in the image, so a failed boot\n" +
+                "  can still be diagnosed over adb.\n" +
+                "  --device-tee/-api/-keymint describe the target device, enabling the\n" +
+                "  device-vs-image assessment (the app reads these from the device itself)."
         )
         exitProcess(2)
     }
@@ -50,6 +55,12 @@ private fun run(argv: Array<String>) {
     var keyFile: File? = null
     var dropFec = true
     var preflightOnly = false
+    var enableAdb = false
+    // The JVM harness has no device to probe, so these stand in for one. They
+    // also make the device-vs-image assessment testable off-hardware.
+    var teeRelease: String? = null
+    var vendorApi: Int? = null
+    var keymintVer: Int? = null
 
     var i = 1
     while (i < argv.size) {
@@ -60,6 +71,10 @@ private fun run(argv: Array<String>) {
             "--key" -> keyFile = File(argv[++i])
             "--keep-fec" -> dropFec = false
             "--preflight" -> preflightOnly = true
+            "--enable-adb" -> enableAdb = true
+            "--device-tee" -> teeRelease = argv[++i]
+            "--device-api" -> vendorApi = argv[++i].toIntOrNull()
+            "--device-keymint" -> keymintVer = argv[++i].toIntOrNull()
             else -> {
                 System.err.println("unknown argument: " + argv[i]); exitProcess(2)
             }
@@ -70,18 +85,25 @@ private fun run(argv: Array<String>) {
         System.err.println("no such file: " + input); exitProcess(1)
     }
 
+    val device = if (teeRelease != null || vendorApi != null || keymintVer != null)
+        DeviceFacts(
+            teeRelease = teeRelease,
+            vendorApiLevel = vendorApi,
+            keymintAidlVersion = keymintVer
+        ) else null
+
     val started = System.currentTimeMillis()
 
     if (preflightOnly) {
         RandomAccessFile(input, "r").use { raf ->
             ImageIo(raf.channel).use { io ->
                 var last = -1
-                val result = Preflight.check(io, release, patch) { done, total ->
+                val result = Preflight.check(io, release, patch, progress = { done, total ->
                     val pct = if (total == 0L) 100 else ((done * 100) / total).toInt()
                     if (pct != last && pct % 10 == 0) {
                         print("\r    scanning " + pct + "%"); System.out.flush(); last = pct
                     }
-                }
+                }, device = device, imageName = input.name)
                 println("\r                    ")
                 println(result)
                 exitProcess(if (result.willLikelyBoot) 0 else 1)
@@ -149,7 +171,7 @@ private fun run(argv: Array<String>) {
         ImageIo(raf.channel).use { io ->
             val report = GsiPatcher.patch(
                 io,
-                GsiPatcher.Options(release, patch, dropFec),
+                GsiPatcher.Options(release, patch, dropFec, enableAdb),
                 keyFile?.readBytes(),
                 progress
             )
@@ -165,7 +187,10 @@ private fun run(argv: Array<String>) {
     println("==> pre-flight")
     RandomAccessFile(target, "r").use { raf ->
         ImageIo(raf.channel).use { io ->
-            println(Preflight.check(io, release, patch).toString().prependIndent("    "))
+            println(
+                Preflight.check(io, release, patch, device = device, imageName = target.name)
+                    .toString().prependIndent("    ")
+            )
         }
     }
     println("done in " + ((System.currentTimeMillis() - started) / 1000) + "s")

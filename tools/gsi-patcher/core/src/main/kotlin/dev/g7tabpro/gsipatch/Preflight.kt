@@ -112,13 +112,20 @@ object Preflight {
         io: ImageIo,
         expectedRelease: String,
         expectedPatch: String,
-        progress: (Long, Long) -> Unit = { _, _ -> }
+        progress: (Long, Long) -> Unit = { _, _ -> },
+        /** When supplied, the report opens with a device-vs-image assessment. */
+        device: DeviceFacts? = null,
+        imageName: String? = null
     ): Result {
         val findings = ArrayList<Finding>()
 
         ImageFormat.requireRaw(io)
         val avb = Avb(io)
         val fs = Ext4(io)
+
+        if (device != null) {
+            findings.addAll(Compatibility.assess(device, Compatibility.readImageFacts(fs, imageName)))
+        }
 
         // --- what is this image, in its own words -------------------------
         var sdk: String? = null

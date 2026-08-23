@@ -44,18 +44,34 @@ object BuildProp {
     class Result(
         val bytes: ByteArray,
         val changes: List<String>,
-        val replacements: Int
+        val replacements: Int,
+        /** adb-related keys present in this file, whatever their value. */
+        val adbKeysPresent: Set<String> = emptySet()
     )
 
     /**
      * @param targetRelease e.g. "13"
      * @param targetPatch   e.g. "2025-09-05"
      */
-    fun patch(original: ByteArray, targetRelease: String, targetPatch: String): Result {
+    /**
+     * Properties that decide whether you get adb if the image hangs before
+     * /data mounts. Both edits are single characters, so the file length is
+     * untouched -- which is what lets this happen in place like everything else.
+     */
+    private const val KEY_ADB_SECURE = "ro.adb.secure"
+    private const val KEY_DEBUGGABLE = "ro.debuggable"
+
+    fun patch(
+        original: ByteArray,
+        targetRelease: String,
+        targetPatch: String,
+        enableAdb: Boolean = false
+    ): Result {
         val text = String(original, Charsets.UTF_8)
         // Keep the exact line terminators: split on '\n' and rejoin the same way.
         val lines = text.split("\n").toMutableList()
         val changes = ArrayList<String>()
+        val adbKeysPresent = LinkedHashSet<String>()
         var n = 0
 
         for (idx in lines.indices) {
@@ -64,9 +80,16 @@ object BuildProp {
             if (eq <= 0) continue
             val key = line.substring(0, eq)
             val value = line.substring(eq + 1)
+            if (key == KEY_ADB_SECURE || key == KEY_DEBUGGABLE) adbKeysPresent.add(key)
             val newValue = when {
                 isReleaseKey(key) -> targetRelease
                 isPatchKey(key) -> targetPatch
+                // adbd authorises against /data/misc/adb/adb_keys, and /data is
+                // exactly what does not mount when this goes wrong. Turning the
+                // check off is the difference between a diagnosable failure and
+                // a black box.
+                enableAdb && key == KEY_ADB_SECURE -> "0"
+                enableAdb && key == KEY_DEBUGGABLE -> "1"
                 else -> null
             } ?: continue
             if (value == newValue) continue
@@ -95,7 +118,7 @@ object BuildProp {
             out = trimmed.toByteArray(Charsets.UTF_8)
             check(out.size == original.size) { "comment reclaim produced the wrong size" }
         }
-        return Result(out, changes, n)
+        return Result(out, changes, n, adbKeysPresent)
     }
 
     /** Reclaim [delta] bytes by shortening '#' comment lines. */

@@ -10,7 +10,14 @@ object GsiPatcher {
     data class Options(
         val targetRelease: String = "13",
         val targetPatch: String = "2025-09-05",
-        val dropFec: Boolean = true
+        val dropFec: Boolean = true,
+        /**
+         * Turn off adb authorisation in the image. adbd checks against
+         * /data/misc/adb/adb_keys, and /data is exactly what fails to mount
+         * when this goes wrong, so without it a failed boot gives no shell and
+         * no logcat. Opt-in: it means any USB host can connect unauthorised.
+         */
+        val enableAdb: Boolean = false
     )
 
     interface Progress {
@@ -31,7 +38,8 @@ object GsiPatcher {
         val newRootDigest: String,
         val algorithm: String,
         val fecDropped: Boolean,
-        val signingKeyReplaced: Boolean
+        val signingKeyReplaced: Boolean,
+        val adbNote: String = "unchanged"
     ) {
         override fun toString(): String = buildString {
             appendLine("partition    : " + partitionName)
@@ -42,7 +50,8 @@ object GsiPatcher {
             appendLine("          -> : " + newRootDigest)
             appendLine("re-signed    : " + algorithm +
                 if (signingKeyReplaced) " (embedded key replaced with the AOSP test key)" else "")
-            append("fec          : " + if (fecDropped) "dropped (descriptor zeroed)" else "unchanged")
+            appendLine("fec          : " + if (fecDropped) "dropped (descriptor zeroed)" else "unchanged")
+            append("adb          : " + adbNote)
         }
     }
 
@@ -119,10 +128,14 @@ object GsiPatcher {
         var totalReplacements = 0
         val patchedPaths = ArrayList<String>()
         val allChanges = ArrayList<String>()
+        val adbKeysSeen = LinkedHashSet<String>()
         for ((p, ino) in found) {
             progress.stage("Patching " + p)
             val original = fs.readFile(ino)
-            val result = BuildProp.patch(original, options.targetRelease, options.targetPatch)
+            val result = BuildProp.patch(
+                original, options.targetRelease, options.targetPatch, options.enableAdb
+            )
+            adbKeysSeen.addAll(result.adbKeysPresent)
             if (result.replacements == 0) continue   // this file defines none of them
             fs.writeFileInPlace(ino, result.bytes)
             totalReplacements += result.replacements
@@ -212,7 +225,24 @@ object GsiPatcher {
             newRootDigest = newRoot.hex(),
             algorithm = avb.algorithmName(),
             fecDropped = options.dropFec && avb.fecSize != 0L,
-            signingKeyReplaced = avb.signingKeyReplaced
+            signingKeyReplaced = avb.signingKeyReplaced,
+            // Say what actually happened. Length-preserving editing cannot add
+            // a line, so an image that never defined ro.adb.secure keeps
+            // whatever adbd defaults to, and claiming otherwise would be a lie
+            // the user only discovers when the thing hangs with no shell.
+            adbNote = when {
+                !options.enableAdb -> "unchanged"
+                allChanges.any { it.contains("ro.adb.secure") || it.contains("ro.debuggable") } ->
+                    "authorisation disabled for debugging"
+                // Present but already permissive -- a userdebug GSI typically
+                // ships ro.adb.secure=0 and ro.debuggable=1 already. Nothing to
+                // change is a success, not the failure case below.
+                adbKeysSeen.isNotEmpty() ->
+                    "already permissive in this image (" + adbKeysSeen.joinToString(", ") + ")"
+                else -> "requested, but this image defines neither ro.adb.secure nor " +
+                    "ro.debuggable, and a line cannot be added in place -- adb may still " +
+                    "be unavailable if it fails to boot"
+            }
         )
     }
 }
