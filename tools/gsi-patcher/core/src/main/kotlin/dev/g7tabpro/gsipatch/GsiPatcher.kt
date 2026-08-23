@@ -70,7 +70,17 @@ object GsiPatcher {
         "/system/product/etc/build.prop",
         "/product/etc/build.prop",
         "/system/system_ext/etc/build.prop",
-        "/system_ext/etc/build.prop"
+        "/system_ext/etc/build.prop",
+        // Less common homes for the same properties. Absent ones cost nothing
+        // (a missing path is skipped), and a single stale copy anywhere is
+        // enough to lose the write-once race.
+        "/system/etc/prop.default",
+        "/system/product/build.prop",
+        "/system/system_ext/build.prop",
+        "/system/etc/build.prop",
+        "/system/odm/etc/build.prop",
+        "/system/odm/build.prop",
+        "/system/vendor/build.prop"
     )
 
     fun patch(io: ImageIo, options: Options, pkcs8Key: ByteArray?, progress: Progress = Silent): Report {

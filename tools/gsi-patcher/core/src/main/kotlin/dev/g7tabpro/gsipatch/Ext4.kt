@@ -146,6 +146,69 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
         return null
     }
 
+    /** name, inode, dirent file_type (1 = regular, 2 = directory) */
+    private fun entries(dirIno: Long): List<Triple<String, Long, Int>> {
+        val out = ArrayList<Triple<String, Long, Int>>()
+        val inode = readInode(dirIno)
+        for (e in extents(inode)) {
+            for (b in 0 until e.len) {
+                val blk = io.read(base + (e.phys + b) * blockSize, blockSize)
+                var o = 0
+                while (o + 8 <= blockSize) {
+                    val ino = blk.le32(o)
+                    val recLen = blk.le16(o + 4)
+                    if (recLen < 8) break
+                    val nameLen = blk[o + 6].toInt() and 0xFF
+                    val type = blk[o + 7].toInt() and 0xFF
+                    if (ino != 0L && nameLen > 0 && o + 8 + nameLen <= blockSize) {
+                        val name = String(blk, o + 8, nameLen, Charsets.UTF_8)
+                        if (name != "." && name != "..") out.add(Triple(name, ino, type))
+                    }
+                    o += recLen
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * Map absolute image offsets back to the files that own them.
+     *
+     * Answers the question the raw version scan cannot: a stray
+     * ro.build.version.release somewhere in the image is only actionable once
+     * you know whether it sits in a prop file this tool failed to patch or in
+     * something inert like an APK. Walks the tree once for all offsets.
+     */
+    fun findPathsContaining(offsets: Collection<Long>): Map<Long, String> {
+        if (offsets.isEmpty()) return emptyMap()
+        val wanted = offsets.associateWith { it / blockSize }
+        val found = HashMap<Long, String>()
+        val stack = ArrayDeque<Pair<Long, String>>()
+        stack.add(Pair(2L, ""))
+        var visited = 0
+        while (stack.isNotEmpty() && found.size < offsets.size && visited < 200_000) {
+            val (ino, path) = stack.removeLast()
+            visited++
+            val kids = try { entries(ino) } catch (e: Exception) { continue }
+            for ((name, childIno, type) in kids) {
+                val childPath = path + "/" + name
+                if (type == 2) {
+                    stack.add(Pair(childIno, childPath))
+                    continue
+                }
+                if (type != 1) continue
+                val exts = try { extents(readInode(childIno)) } catch (e: Exception) { continue }
+                for ((off, blk) in wanted) {
+                    if (found.containsKey(off)) continue
+                    for (e in exts) {
+                        if (blk >= e.phys && blk < e.phys + e.len) { found[off] = childPath; break }
+                    }
+                }
+            }
+        }
+        return found
+    }
+
     fun readFile(ino: Long): ByteArray {
         val inode = readInode(ino)
         val size = fileSize(inode)

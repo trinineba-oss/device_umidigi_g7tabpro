@@ -25,6 +25,9 @@ package dev.g7tabpro.gsipatch
  */
 object Preflight {
 
+    /** A version string found by the raw scan, and where in the image it sits. */
+    class Hit(val text: String, val offset: Long)
+
     class Finding(val severity: Severity, val message: String) {
         override fun toString() = severity.tag + " " + message
     }
@@ -63,8 +66,8 @@ object Preflight {
         imageSize: Long,
         targetRelease: String,
         progress: (Long, Long) -> Unit = { _, _ -> }
-    ): List<String> {
-        val stale = LinkedHashSet<String>()
+    ): List<Hit> {
+        val stale = LinkedHashMap<String, Long>()
         val overlap = 64
         var pos = 0L
         var carry = ByteArray(0)
@@ -86,7 +89,8 @@ object Preflight {
                     if (value.isNotEmpty() && value != targetRelease &&
                         key.all { it.isLetterOrDigit() || it == '.' || it == '_' }
                     ) {
-                        stale.add("$key=$value")
+                        // absolute offset: text starts carry.size before pos
+                        stale.putIfAbsent("$key=$value", pos - carry.size.toLong() + s)
                     }
                 }
                 i = text.indexOf(KEY_RELEASE, i + 1)
@@ -95,7 +99,7 @@ object Preflight {
             pos += len
             progress(pos, imageSize)
         }
-        return stale.toList()
+        return stale.map { Hit(it.key, it.value) }
     }
 
     /**
@@ -188,16 +192,44 @@ object Preflight {
         if (stale.isEmpty()) {
             findings.add(Finding(Severity.INFO, "no leftover version strings anywhere in the image"))
         } else {
-            findings.add(
-                Finding(
-                    Severity.WARNING,
-                    "found " + stale.size + " version string(s) elsewhere in the image (" +
-                        stale.joinToString(", ") + "). These are usually inert -- embedded in an " +
-                        "APK or left in free space -- and a known-good image carries some. But if " +
-                        "this image fails to boot reporting the wrong version, check whether one " +
-                        "of them lives in a prop file this tool does not yet patch."
+            // A raw hit is only actionable once you know what owns it. Inside a
+            // prop file the patcher does not rewrite it is fatal; inside an APK
+            // or free space it is inert, and known-good images carry some.
+            val owners = try {
+                fs.findPathsContaining(stale.map { it.offset })
+            } catch (e: Exception) {
+                emptyMap()
+            }
+            val inPropFiles = ArrayList<String>()
+            val inert = ArrayList<String>()
+            for (hit in stale) {
+                val owner = owners[hit.offset]
+                val isPropFile = owner != null &&
+                    (owner.endsWith("build.prop") || owner.endsWith("prop.default") ||
+                        owner.endsWith(".prop"))
+                if (isPropFile) inPropFiles.add(hit.text + " in " + owner)
+                else inert.add(hit.text + (owner?.let { " in " + it } ?: " at offset " + hit.offset))
+            }
+            for (p in inPropFiles) {
+                findings.add(
+                    Finding(
+                        Severity.BLOCKER,
+                        p + " -- this is a property file the patcher does not rewrite, and " +
+                            "ro. properties are write-once, so this value can win over the " +
+                            "patched ones. Report the path so it can be added to the list."
+                    )
                 )
-            )
+            }
+            if (inert.isNotEmpty()) {
+                findings.add(
+                    Finding(
+                        Severity.WARNING,
+                        "found " + inert.size + " version string(s) outside any property file (" +
+                            inert.joinToString(", ") + "). These are normally inert -- embedded " +
+                            "in an APK or left in free space -- and a known-good image carries some."
+                    )
+                )
+            }
         }
 
         // --- will you be able to see anything if it hangs? -----------------
