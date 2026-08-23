@@ -3,6 +3,18 @@
 Status: **cause confirmed by policy analysis; corrected image built and verified
 offline; not yet tested on hardware.**
 
+Re-verified 2026-08-22, before any flash attempt:
+
+- Base confirmed **20241121**, matching the vendor running on the device
+  (`ro.vendor.build.fingerprint=UMIDIGI/G7_Tab_Pro/G7_Tab_Pro:13/TP1A.220624.014/20241121:user/release-keys`).
+  An earlier build of this patch used the wrong base (20250423) and was caught before flashing.
+- All three components present in `vendor_kmsel.img`: `build.prop` 643-644 define the props,
+  `vendor_property_contexts` 811-812 label them, and `libkeymint.so` contains
+  `ro.vendor.kmosver`/`ro.vendor.kmospatch` with `ro.build.version.release` and
+  `ro.build.version.security_patch` no longer present in it.
+- AVB re-verified: stock salt `15aa12b7...`, stock partition size 1006141440, root digest
+  `b9faed28...`, and `avbtool verify_image` passes footer and full hashtree.
+
 This is goal 2 of the project: make *any* unmodified GSI boot, with no per-image
 patching. The mechanism is a vendor-side redirect of the OS-version properties
 that the TrustKernel KeyMint HAL reports to the TA. See
@@ -182,7 +194,13 @@ recovery cycles.
 
 Recovering from a bad vendor flash needs **both** stock `vbmeta` *and* stock
 `vendor` restored; SP Flash Tool in plain Download mode is the escape hatch.
-Never "Format All" — that is what damaged this unit's keybox originally.
+Never "Format All". **The reason previously given here — that it destroyed this unit's
+keybox — was wrong and is retracted (2026-08-22).** The keyboxes were never damaged:
+`vendor.trustkernel.widevine_keybox.deployed=false` is this device's normal state, because
+the stock vendor image ships no `liboemcrypto.so` at all and the device is Widevine L3 by
+design. The real reason to avoid Format All stands: it erases `nvram`/`nvdata`/`persist`,
+which a normal Download-mode scatter load does not restore — losing IMEI, WiFi/BT MAC and
+sensor calibration, turning a recoverable mistake into an unrecoverable one.
 
 ## Expected result
 
