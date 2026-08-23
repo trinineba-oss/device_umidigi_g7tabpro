@@ -137,29 +137,56 @@ e2fsck -fy "$IMG" >/dev/null 2>&1
 mkdir -p "$MNT"
 mount -o loop,rw "$IMG" "$MNT" || die "loop mount failed"
 
-BP="$MNT/system/build.prop"
-[ -f "$BP" ] || { BP="$MNT/build.prop"; }
-[ -f "$BP" ] || die "build.prop not found in image"
+# Every prop file that defines a version, not just /system/build.prop.
+# ro. properties are write-once, so whichever file init reads first wins: an
+# Android 16 GSI carries the generic ro.build.version.release in
+# /system/product/etc/build.prop as well, and patching only /system leaves the
+# runtime reporting the unpatched value. A14/A15 lack the duplicates, which is
+# why single-file patching appeared to work for so long.
+CANDIDATES="
+/system/build.prop
+/build.prop
+/system/product/etc/build.prop
+/system/system_ext/etc/build.prop
+/system/etc/prop.default
+/system/product/build.prop
+/system/system_ext/build.prop
+"
 
-echo "--- before ---"
-grep -E '^ro\.build\.version\.(release|release_or_codename|security_patch|sdk)=' "$BP" || true
+PATCHED=0
+for rel in $CANDIDATES; do
+    BP="$MNT$rel"
+    [ -f "$BP" ] || continue
+    echo "--- $rel (before) ---"
+    grep -E 'build\.version\.(release|release_or_codename|security_patch|sdk)=' "$BP" | sed 's/^/    /' || true
 
-# The KeyMint HAL reports ro.build.version.release to the TEE, which must match
-# what the TEE was told at boot. sdk is deliberately NOT touched: the framework
-# keeps behaving as its real API level.
-sed -i "s/^ro\.build\.version\.release=.*/ro.build.version.release=$TARGET_RELEASE/" "$BP"
-sed -i "s/^ro\.build\.version\.release_or_codename=.*/ro.build.version.release_or_codename=$TARGET_RELEASE/" "$BP"
-sed -i "s/^ro\.build\.version\.security_patch=.*/ro.build.version.security_patch=$TARGET_PATCH/" "$BP"
+    # Match on the key suffix so partition-scoped variants are caught too:
+    # ro.system., ro.product., ro.system_ext. and friends.
+    sed -i -E "s/^([A-Za-z0-9_.]*build\.version\.release)=.*/\1=$TARGET_RELEASE/; \
+               s/^([A-Za-z0-9_.]*build\.version\.release_or_codename)=.*/\1=$TARGET_RELEASE/; \
+               s/^([A-Za-z0-9_.]*build\.version\.security_patch)=.*/\1=$TARGET_PATCH/" "$BP"
 
-echo "--- after ---"
-grep -E '^ro\.build\.version\.(release|release_or_codename|security_patch|sdk)=' "$BP" || true
+    echo "--- $rel (after) ---"
+    grep -E 'build\.version\.(release|release_or_codename|security_patch|sdk)=' "$BP" | sed 's/^/    /' || true
+    PATCHED=$(( PATCHED + 1 ))
+done
 
-# hard-assert the edits actually landed; a silent sed miss would produce an
-# image that looks fine and still hangs at the splash
-grep -qE "^ro\.build\.version\.release=${TARGET_RELEASE}$" "$BP" \
-    || die "release edit did not apply"
-grep -qE "^ro\.build\.version\.security_patch=${TARGET_PATCH}$" "$BP" \
-    || die "security_patch edit did not apply"
+[ "$PATCHED" -gt 0 ] || die "no build.prop found in image"
+info "patched $PATCHED prop file(s)"
+
+# Hard-assert nothing is left behind. A single stale copy anywhere is enough to
+# lose the write-once race and make the whole exercise pointless.
+LEFT=0
+for rel in $CANDIDATES; do
+    BP="$MNT$rel"
+    [ -f "$BP" ] || continue
+    BAD=$(grep -E "build\.version\.(release|release_or_codename)=" "$BP" | grep -v "=${TARGET_RELEASE}$" || true)
+    if [ -n "$BAD" ]; then
+        echo "STILL UNPATCHED in $rel:"; echo "$BAD" | sed 's/^/    /'
+        LEFT=1
+    fi
+done
+[ "$LEFT" -eq 0 ] || die "a version property survived the edit -- see above"
 
 sync
 umount "$MNT"
