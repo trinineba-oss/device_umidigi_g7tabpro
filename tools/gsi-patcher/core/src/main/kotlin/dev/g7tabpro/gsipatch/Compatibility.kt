@@ -75,11 +75,23 @@ object Compatibility {
         Tested(Regex("lineage", RegexOption.IGNORE_CASE), 36, true,
             "LineageOS 23.2 (sdk 36) boots once patched, despite a four-generation gap " +
                 "over the vendor."),
+        Tested(Regex("circle", RegexOption.IGNORE_CASE), 36, true,
+            "Project Circle (sdk 36) boots once patched, verified via DSU with /data mounted " +
+                "and no KeyMint errors."),
+        Tested(Regex("avium", RegexOption.IGNORE_CASE), 36, true,
+            "AviumUI (sdk 36) boots once patched, verified via DSU."),
+        Tested(Regex("axion", RegexOption.IGNORE_CASE), null, false,
+            "Axion 2.7 reverted instantly under DSU -- a different failure shape from Infinity-X " +
+                "and Lunaris, which patch correctly and hang at the splash instead. An instant " +
+                "revert matches what an AVB/signature rejection looks like, so check the patcher " +
+                "version used before assuming this image cannot work: v1 never replaced a " +
+                "maintainer's own embedded signing key, which fails exactly this way."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 36, false,
             "Infinity-X 3.12 was patched correctly -- the TEE and the system agreed on 13 -- and " +
-                "KeyMint still returned KEYMINT_NOT_CONFIGURED, so /data never mounted. Note " +
-                "LineageOS 23.2 shares this exact build id and does boot, so the cause is " +
-                "something in the ROM rather than the Android version. Patching cannot fix it."),
+                "KeyMint still returned KEYMINT_NOT_CONFIGURED, so /data never mounted. Both " +
+                "LineageOS 23.2 and Project Circle share this exact build id (BP4A.251205.006) " +
+                "and both boot, so the cause is specific to this ROM rather than Android 16. " +
+                "Patching cannot fix it."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 35, false,
             "Infinity-X 2.9 reverted instantly under DSU. That test predates the signing-key " +
                 "fix, so it is worth retrying before believing it."),
