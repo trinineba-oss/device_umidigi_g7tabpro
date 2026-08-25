@@ -24,6 +24,7 @@ import dev.g7tabpro.gsipatch.Compatibility
 import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
+import dev.g7tabpro.gsipatch.Ingest
 import dev.g7tabpro.gsipatch.DeviceFacts
 import dev.g7tabpro.gsipatch.Preflight
 import java.io.FileInputStream
@@ -211,6 +212,18 @@ class MainActivity : Activity() {
         if (bytes < 0) "unknown size"
         else String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
 
+    /** Reads up to [n] bytes without requiring the stream to support mark/reset. */
+    private fun readHeadBytes(stream: java.io.InputStream, n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var total = 0
+        while (total < n) {
+            val r = stream.read(buf, total, n - total)
+            if (r < 0) break
+            total += r
+        }
+        return if (total < n) buf.copyOf(total) else buf
+    }
+
     // ----------------------------------------------------------------- worker
 
     private fun startPatch() {
@@ -265,9 +278,20 @@ class MainActivity : Activity() {
 
         Thread {
             try {
-                // Preflight needs random access, so a compressed file cannot be
-                // checked where it sits -- say so rather than failing later with
-                // a misleading "no AVB footer".
+                // Preflight needs random access, so a compressed file -- or a
+                // container needing extraction first -- cannot be checked
+                // where it sits. Say so rather than failing later with a
+                // misleading "no AVB footer" (Compression's own detection
+                // doesn't know about zip/7z/payload.bin at all, so without
+                // this a container would misdetect as RAW and fail confusingly).
+                val head = contentResolver.openInputStream(inUri)?.use { readHeadBytes(it, 8) } ?: ByteArray(0)
+                if (Ingest.looksLikeContainer(head)) {
+                    throw IllegalArgumentException(
+                        "this is a zip/7z/payload.bin container, not a plain image; checking " +
+                            "reads the image directly, so patch it first and the finished image " +
+                            "is checked automatically"
+                    )
+                }
                 val kind = contentResolver.openInputStream(inUri).use { raw ->
                     requireNotNull(raw) { "cannot open the selected image" }
                     Compression.open(raw).kind
@@ -305,40 +329,87 @@ class MainActivity : Activity() {
 
     private fun runPatch(inUri: Uri, outUri: Uri, release: String, patch: String) {
         appendLog("")
-        val total = sizeOf(inUri)
+        var total = sizeOf(inUri)
         var written = 0L
         var lastPct = -1
 
-        contentResolver.openInputStream(inUri).use { rawIn ->
-            requireNotNull(rawIn) { "cannot open the selected GSI for reading" }
-            // Detected from the header, not the filename: a 7z container throws
-            // here with a clear message rather than failing later as bad ext4.
-            val src = Compression.open(rawIn)
-            appendLog(
-                if (src.kind == Compression.Kind.RAW) "== copying to destination"
-                else "== decompressing (" + src.kind.label + ") to destination"
-            )
-            contentResolver.openOutputStream(outUri, "wt").use { out ->
-                requireNotNull(out) { "cannot open the destination for writing" }
-                val buf = ByteArray(1 shl 20)
-                while (true) {
-                    val n = src.stream.read(buf)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    written += n
-                    // Progress tracks the compressed side, which is the only
-                    // total known up front, so it works for gzip and xz too.
-                    if (total > 0) {
-                        val pct = ((src.compressedBytesRead * 100) / total)
-                            .toInt().coerceAtMost(100)
-                        if (pct != lastPct) {
-                            lastPct = pct
-                            updateProgress(pct)
-                        }
+        // An OTA zip, a bare payload.bin, or a 7z all need reducing to a
+        // plain system image before anything below (which only ever
+        // understood raw/gz/xz) can run. Peek a few bytes rather than always
+        // copying first: most inputs are not containers, and a multi-gigabyte
+        // GSI is expensive to copy twice on a phone's limited storage for
+        // nothing.
+        val head = contentResolver.openInputStream(inUri)?.use { readHeadBytes(it, 8) } ?: ByteArray(0)
+        var containerTemp: java.io.File? = null
+        var unwrapped: java.io.File? = null
+        if (Ingest.looksLikeContainer(head)) {
+            appendLog("== extracting from container (" + displayName(inUri) + ")")
+            val tmp = java.io.File(cacheDir, "ingest-input.tmp")
+            contentResolver.openInputStream(inUri).use { rawIn ->
+                requireNotNull(rawIn) { "cannot open the selected file for reading" }
+                tmp.outputStream().use { out ->
+                    val buf = ByteArray(1 shl 20)
+                    var copied = 0L
+                    while (true) {
+                        val n = rawIn.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        copied += n
+                        if (total > 0) updateProgress(((copied * 100) / total).toInt().coerceAtMost(100))
                     }
                 }
-                out.flush()
             }
+            containerTemp = tmp
+            unwrapped = Ingest.unwrap(tmp, cacheDir, "system") { done, tot ->
+                updateProgress(if (tot == 0L) 100 else ((done * 100) / tot).toInt())
+            }
+            appendLog("   extracted: " + unwrapped.name)
+            total = unwrapped.length()
+        }
+
+        try {
+            val open: () -> java.io.InputStream = unwrapped?.let { f -> ({ f.inputStream() }) }
+                ?: { contentResolver.openInputStream(inUri) ?: throw IllegalStateException("cannot open the selected GSI for reading") }
+
+            open().use { rawIn ->
+                // Detected from the header, not the filename: a 7z container
+                // (one this app didn't already unwrap above -- e.g. one that
+                // doesn't actually contain a GSI) throws here with a clear
+                // message rather than failing later as bad ext4.
+                val src = Compression.open(rawIn)
+                appendLog(
+                    if (src.kind == Compression.Kind.RAW) "== copying to destination"
+                    else "== decompressing (" + src.kind.label + ") to destination"
+                )
+                contentResolver.openOutputStream(outUri, "wt").use { out ->
+                    requireNotNull(out) { "cannot open the destination for writing" }
+                    val buf = ByteArray(1 shl 20)
+                    while (true) {
+                        val n = src.stream.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        written += n
+                        // Progress tracks the compressed side, which is the only
+                        // total known up front, so it works for gzip and xz too.
+                        if (total > 0) {
+                            val pct = ((src.compressedBytesRead * 100) / total)
+                                .toInt().coerceAtMost(100)
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                updateProgress(pct)
+                            }
+                        }
+                    }
+                    out.flush()
+                }
+            }
+        } finally {
+            // These can be multi-gigabyte -- an unwrapped system image is
+            // comparable in size to the source GSI -- so clean them up
+            // whether the extraction above succeeded or the patch below
+            // failed, rather than silently eating the phone's storage.
+            containerTemp?.delete()
+            if (unwrapped != null && unwrapped != containerTemp) unwrapped.delete()
         }
         appendLog("   wrote " + fmt(written))
 

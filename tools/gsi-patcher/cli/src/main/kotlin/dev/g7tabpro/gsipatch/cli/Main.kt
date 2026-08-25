@@ -4,6 +4,7 @@ import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.DeviceFacts
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
+import dev.g7tabpro.gsipatch.Ingest
 import dev.g7tabpro.gsipatch.Preflight
 import java.io.File
 import java.io.FileOutputStream
@@ -94,39 +95,47 @@ private fun run(argv: Array<String>) {
 
     val started = System.currentTimeMillis()
 
-    if (preflightOnly) {
-        RandomAccessFile(input, "r").use { raf ->
-            ImageIo(raf.channel).use { io ->
-                var last = -1
-                val result = Preflight.check(io, release, patch, progress = { done, total ->
-                    val pct = if (total == 0L) 100 else ((done * 100) / total).toInt()
-                    if (pct != last && pct % 10 == 0) {
-                        print("\r    scanning " + pct + "%"); System.out.flush(); last = pct
-                    }
-                }, device = device, imageName = input.name)
-                println("\r                    ")
-                println(result)
-                exitProcess(if (result.willLikelyBoot) 0 else 1)
-            }
-        }
-    }
+    // ---- container stage
+    // An OTA zip, a bare payload.bin, or a 7z archive all need reducing to a
+    // plain system image before anything below (which only ever understood
+    // raw/gz/xz) can run. workDir has to be a real directory the process can
+    // write scratch files into; --out's parent is the natural choice when
+    // there is one, since a compressed/container input already requires it.
+    val workDir = (output?.parentFile ?: input.parentFile ?: File(".")).also { it.mkdirs() }
+    val unwrapped = Ingest.unwrap(input, workDir, progress = { done, total ->
+        val pct = if (total == 0L) 100 else ((done * 100) / total).toInt()
+        print("\r    extracting payload " + pct + "%"); System.out.flush()
+    })
+    if (unwrapped !== input) println("\r    extracted from container: " + unwrapped.name + "    ")
 
     // ---- decompress / copy stage
+    // Must run before --preflight, not just before patching: preflight reads
+    // AVB/ext4 structure near the end of the file, and a compressed source's
+    // tail bytes are compressed-stream bytes, not the image's. Checking the
+    // input directly here would always fail with a confusing "no AVB footer"
+    // error, regardless of whether the underlying image is actually fine.
     val target: File
-    val source = input.inputStream().use { probe -> Compression.open(probe).kind }
-    if (source == Compression.Kind.RAW && output == null) {
+    val source = unwrapped.inputStream().use { probe -> Compression.open(probe).kind }
+    // A container/payload extraction always lands in workDir under a
+    // generated name, never the user's own file -- always copy it to an
+    // explicit --out rather than silently "patching in place" somewhere the
+    // user didn't choose and might lose track of.
+    if (source == Compression.Kind.RAW && output == null && unwrapped === input) {
         target = input
-        println("==> raw image, patching in place")
+        println("==> raw image" + (if (preflightOnly) "" else ", patching in place"))
     } else {
         if (output == null) {
-            System.err.println("input is " + source.label + "-compressed; --out is required")
+            System.err.println(
+                (if (unwrapped === input) "input is " + source.label + "-compressed"
+                else "input needed container extraction") + "; --out is required"
+            )
             exitProcess(2)
         }
         target = output
         println("==> " + source.label + " input, writing to " + target)
-        val totalIn = input.length()
+        val totalIn = unwrapped.length()
         var lastPct = -1
-        input.inputStream().use { raw ->
+        unwrapped.inputStream().use { raw ->
             val src = Compression.open(raw)
             FileOutputStream(target).use { out ->
                 val buf = ByteArray(1 shl 20)
@@ -146,6 +155,24 @@ private fun run(argv: Array<String>) {
                     }
                 }
                 println("\r    extracted " + written + " bytes    ")
+            }
+        }
+        if (unwrapped !== input) unwrapped.delete()
+    }
+
+    if (preflightOnly) {
+        RandomAccessFile(target, "r").use { raf ->
+            ImageIo(raf.channel).use { io ->
+                var last = -1
+                val result = Preflight.check(io, release, patch, progress = { done, total ->
+                    val pct = if (total == 0L) 100 else ((done * 100) / total).toInt()
+                    if (pct != last && pct % 10 == 0) {
+                        print("\r    scanning " + pct + "%"); System.out.flush(); last = pct
+                    }
+                }, device = device, imageName = target.name)
+                println("\r                    ")
+                println(result)
+                exitProcess(if (result.willLikelyBoot) 0 else 1)
             }
         }
     }

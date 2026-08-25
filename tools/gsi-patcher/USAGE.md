@@ -48,8 +48,12 @@ picker.
 
 ## Patching
 
-1. **Choose GSI.** Accepts `.img`, `.img.gz` and `.img.xz`. The format is
-   detected from the file's contents, so a renamed download still works.
+1. **Choose GSI.** Accepts a raw `.img`, `.img.gz`, `.img.xz`, a `.7z`
+   archive, or a full OTA package -- either the `.zip` a ROM project actually
+   publishes, or a bare `payload.bin` if you already extracted one. The format
+   is detected from the file's contents, so a renamed download still works.
+   For a zip/payload.bin, the app pulls the `system` partition out of it
+   automatically; there's nothing extra to do first.
 2. **Choose where to save.** The picker suggests a name like
    `LineageOS-22.2-...-osver13.img`. Save it somewhere on internal storage or
    the SD card. **Not** Drive/OneDrive or any cloud location -- the patcher needs
@@ -165,7 +169,9 @@ The app reports one clear line. The common ones:
 | `no AVB footer in the last 64 bytes: is this a GSI system image?` | Not a GSI `system.img`. A `boot.img`, `vendor.img` or a full-ROM archive will do this. |
 | `this is an Android sparse image, not a raw one` | Run it through `simg2img` first, then patch the result. |
 | `this image uses EROFS` | Only ext4 GSIs can be patched in place. Look for an EXT4 build of the same GSI. |
-| `this is a 7z archive, ...` | `.7z` is an archive containing the image, not a compressed image. Extract the `.img` first, then patch that. |
+| `this zip has no payload.bin inside it` | Not an OTA package this tool recognises -- some other kind of zip. |
+| `this payload has no "system" partition` | The OTA package doesn't carry a full system image (e.g. it's a partial/firmware-only update). |
+| `...needs the previous partition to apply against` | This `payload.bin` is a delta/incremental OTA, not a full one -- it only makes sense applied on top of an existing install, which a standalone downloaded GSI isn't. |
 | `the destination does not support random access` | You chose a cloud location. Save to internal storage or the SD card. |
 | `no version properties needed changing: this image already reports release 13` | Already patched, or a GSI that is genuinely Android 13. Nothing to do. |
 | `this image is signed with a N-bit key but the patcher holds a M-bit one` | The GSI uses a larger signing key (RSA4096). Not currently re-signable. |

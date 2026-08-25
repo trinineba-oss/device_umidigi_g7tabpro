@@ -8,7 +8,10 @@ dm-verity hashtree.
 
 Pick the GSI, pick where to save it, press Patch. No root, no PC, no shell.
 
-Accepts `.img`, `.img.gz` and `.img.xz`, decompressing on the fly.
+Accepts a raw `.img`, `.img.gz`, `.img.xz`, a `.7z` archive, a bare OTA
+`payload.bin`, or a full OTA `.zip` with one inside -- so a ROM project's
+official release, not just a bare system-image dump, can be handed straight
+to this app. See [Input formats](#input-formats) below.
 
 **Using the app? See [USAGE.md](USAGE.md).** This file covers how it works and
 how to build it.
@@ -60,16 +63,13 @@ to an inode and stays inside its extents instead of searching the image.
 | raw `.img` | copied straight through |
 | `.img.gz` | `GZIPInputStream` (JDK builtin) |
 | `.img.xz` | `org.tukaani:xz`, a pure-Java LZMA2 decoder -- neither the JDK nor Android ships xz support |
-| `.7z` | rejected with a clear message (see below) |
+| `.7z` | [`Ingest.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Ingest.kt), via `commons-compress`; extracts the first file entry, which then goes through the row above like any other input |
+| OTA `.zip` | `Ingest.kt` finds `payload.bin` inside via `java.util.zip.ZipFile`, then extracts it as below |
+| `payload.bin` | [`Payload.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Payload.kt) + [`Protobuf.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Protobuf.kt) -- see below |
 
 The format is detected from the **magic bytes, not the file extension**.
 Renaming a download is common, and guessing from the name surfaces as a
 confusing ext4 or AVB failure much later instead of a clear message up front.
-
-`.7z` is deliberately not supported: it is an archive *container* rather than a
-compressed stream, so handling it means selecting an entry and needs
-random access to the archive, not just a decoding filter. Extract the `.img`
-first. The patcher recognises the 7z magic and says exactly that.
 
 The LZMA2 dictionary is capped at 256 MiB (`xz -9` uses 64 MiB), so a
 pathological file fails with a clear memory-limit error rather than an
@@ -77,6 +77,39 @@ out-of-memory kill on a phone.
 
 Progress is measured on the **compressed** side, since that is the only total
 known up front -- so the bar is accurate for gzip and xz as well as raw images.
+
+### `payload.bin` (OTA packages)
+
+Many ROM projects -- not just pure Treble/GSI maintainers -- only publish a
+full OTA `.zip`, with the actual system image buried inside as
+`payload.bin` in Android's `update_engine` A/B format
+(`chromeos_update_engine.DeltaArchiveManifest`, a protobuf; see
+`system/update_engine/update_metadata.proto` in any AOSP tree). Previously
+that meant telling the user to go extract it themselves first. Now the app
+does it directly: given a `.zip`, it finds `payload.bin` inside; given either
+one, it parses the manifest and pulls out the `system` partition.
+
+`Protobuf.kt` is a **hand-rolled, minimal** wire-format reader -- not a
+generated-from-.proto client, and deliberately not a dependency on a full
+protobuf runtime (Android already has enough jar bloat from elsewhere; this
+schema needs maybe a dozen fields). Every field number it reads was
+cross-checked against `update_metadata.proto` directly, not transcribed from
+memory: a wrong field number wouldn't fail loudly here, it would silently
+misparse. Validated against AOSP's own reference implementation
+(`update_payload.Payload.Apply()`, the Python library `paycheck.py` uses) by
+building a synthetic payload with AOSP's own generated `update_metadata_pb2`
+bindings, applying it with both implementations, and diffing the result --
+byte-identical across REPLACE, REPLACE_BZ and REPLACE_XZ operations, the three
+a **full** (non-incremental) payload ever actually contains.
+
+That "full payload" qualifier matters: `payload.bin` also supports delta/
+incremental operations (`SOURCE_COPY`, `*_BSDIFF`, `PUFFDIFF`) that patch an
+*existing* installed partition rather than write a new one from scratch. This
+tool patches a standalone downloaded GSI, which has no "existing installed
+partition" to diff against, so a payload that turns out to need one of those
+fails with a clear message rather than silently producing a corrupt image --
+it was never going to be able to apply one correctly regardless of how it's
+implemented.
 
 ## FEC
 
