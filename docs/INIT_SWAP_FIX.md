@@ -202,4 +202,15 @@ same `tdgsi_arm64_ab` base, all from the same maintainer):
 | AviumUI 16.2.1 | required | not needed | yes |
 | LineageOS 23.2 (different maintainer) | required | not needed | yes |
 | Infinity-X 3.12 | applied, correct | **required** | **yes, with swap** |
+| crDroid | applied | used | **yes, with swap** — see caveat |
 | Lunaris-AOSP 3.10 | applied, correct | untested — expected to help | not yet retested |
+
+**crDroid caveat.** It boots with version patch + donor init, confirmed on
+hardware. But its previous failure was an *instant DSU revert* — a different
+signature from Infinity's splash hang, and the shape of an AVB/signature
+rejection rather than a KeyMint one. That test predates **both** the embedded
+-signing-key fix (v2) and the init swap, so two things changed since. Which one
+unblocked it is not established; only the combination has been tested. A run
+with the version patch and **no** donor would settle it, and is worth doing
+before citing crDroid as evidence that the init fix generalises across
+maintainers.

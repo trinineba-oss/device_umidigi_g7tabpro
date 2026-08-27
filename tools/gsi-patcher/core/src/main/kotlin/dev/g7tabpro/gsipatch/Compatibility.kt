@@ -86,18 +86,21 @@ object Compatibility {
                 "revert matches what an AVB/signature rejection looks like, so check the patcher " +
                 "version used before assuming this image cannot work: v1 never replaced a " +
                 "maintainer's own embedded signing key, which fails exactly this way."),
-        Tested(Regex("infinity", RegexOption.IGNORE_CASE), 36, false,
-            "Infinity-X 3.12 was patched correctly -- the TEE and the system agreed on 13 -- and " +
-                "KeyMint still returned KEYMINT_NOT_CONFIGURED, so /data never mounted. Both " +
-                "LineageOS 23.2 and Project Circle share this exact build id (BP4A.251205.006) " +
-                "and both boot, so the cause is specific to this ROM rather than Android 16. " +
-                "Patching cannot fix it."),
+        Tested(Regex("infinity", RegexOption.IGNORE_CASE), 36, true,
+            "Infinity-X 3.12 BOOTS once its /system/bin/init is replaced with one from a GSI " +
+                "that boots here (confirmed on hardware). The version patch alone is not enough: " +
+                "it was applied correctly -- TEE and system both reading 13 -- and KeyMint still " +
+                "returned KEYMINT_NOT_CONFIGURED, because the vendor KeyMint HAL loses a " +
+                "servicemanager registration race and keystore2 caches an emulated fallback. " +
+                "Use the donor-init option; see docs/INIT_SWAP_FIX.md."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 35, false,
             "Infinity-X 2.9 reverted instantly under DSU. That test predates the signing-key " +
                 "fix, so it is worth retrying before believing it."),
-        Tested(Regex("crdroid", RegexOption.IGNORE_CASE), null, false,
-            "crDroid 10 reverted instantly under DSU. That test predates the signing-key fix, " +
-                "so it is worth retrying before believing it."),
+        Tested(Regex("crdroid", RegexOption.IGNORE_CASE), null, true,
+            "crDroid BOOTS with the version patch plus a donor init (confirmed on hardware). " +
+                "Note its earlier instant-revert failure predates BOTH the embedded-signing-key " +
+                "fix and the init swap, so which of the two unblocked it is not established -- " +
+                "the combination is what was tested."),
         Tested(Regex("phh|peter", RegexOption.IGNORE_CASE), null, true,
             "phh-based builds boot without patching -- they spoof the version themselves.")
     )
