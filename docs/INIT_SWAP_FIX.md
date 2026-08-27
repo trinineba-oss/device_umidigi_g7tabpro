@@ -205,6 +205,11 @@ same `tdgsi_arm64_ab` base, all from the same maintainer):
 | crDroid | applied | used | **yes, with swap** — see caveat |
 | Lunaris-AOSP 3.12 | applied | used | **yes, with swap** — see caveat |
 
+All three of those were patched **on the device itself**, with the app, using
+Project CiRCLE's init as the donor — no PC involved. Infinity-X's own init is a
+sparse file, so that case also exercised the on-device ext4 block allocation
+and relocation path end to end.
+
 ### Read the "with swap" rows carefully
 
 Only **Infinity-X** is a clean single-variable result. Its version patch was
