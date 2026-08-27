@@ -203,14 +203,28 @@ same `tdgsi_arm64_ab` base, all from the same maintainer):
 | LineageOS 23.2 (different maintainer) | required | not needed | yes |
 | Infinity-X 3.12 | applied, correct | **required** | **yes, with swap** |
 | crDroid | applied | used | **yes, with swap** — see caveat |
-| Lunaris-AOSP 3.10 | applied, correct | untested — expected to help | not yet retested |
+| Lunaris-AOSP 3.12 | applied | used | **yes, with swap** — see caveat |
 
-**crDroid caveat.** It boots with version patch + donor init, confirmed on
-hardware. But its previous failure was an *instant DSU revert* — a different
-signature from Infinity's splash hang, and the shape of an AVB/signature
-rejection rather than a KeyMint one. That test predates **both** the embedded
--signing-key fix (v2) and the init swap, so two things changed since. Which one
-unblocked it is not established; only the combination has been tested. A run
-with the version patch and **no** donor would settle it, and is worth doing
-before citing crDroid as evidence that the init fix generalises across
-maintainers.
+### Read the "with swap" rows carefully
+
+Only **Infinity-X** is a clean single-variable result. Its version patch was
+directly verified correct at runtime (`ro.keymaster.*.release` = 13 ==
+`ro.build.version.release` = 13, confirmed by live `getprop` on the hung boot)
+and it *still* hung — so the swap is what changed the outcome.
+
+The other two boot with **version patch + swap together**, and neither has had
+a run with the version patch alone:
+
+- **crDroid** previously failed with an *instant DSU revert* — a different
+  signature from a splash hang, and the shape of an AVB/signature rejection
+  rather than a KeyMint one. That test predates **both** the embedded-signing
+  -key fix (v2) and the init swap, so two things changed since.
+- **Lunaris** is ambiguous twice over. The image that booted is **3.12**, a
+  different build from the **3.10** that hung — and that 3.10 image was later
+  found to be **entirely unpatched** (still reporting release 16), so it never
+  tested anything either. Its version patch has never had a run of its own.
+
+So the honest count is **one image where the swap is proven necessary, and two
+where it is merely sufficient in combination**. A run of either with the
+version patch and **no** donor would settle it, and is worth doing before
+citing them as evidence that the init fix generalises across maintainers.
