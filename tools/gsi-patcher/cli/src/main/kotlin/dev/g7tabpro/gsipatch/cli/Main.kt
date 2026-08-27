@@ -5,6 +5,7 @@ import dev.g7tabpro.gsipatch.DeviceFacts
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
 import dev.g7tabpro.gsipatch.Ingest
+import dev.g7tabpro.gsipatch.InitSwap
 import dev.g7tabpro.gsipatch.Preflight
 import java.io.File
 import java.io.FileOutputStream
@@ -45,7 +46,13 @@ private fun run(argv: Array<String>) {
                 "  --enable-adb turns off adb authorisation in the image, so a failed boot\n" +
                 "  can still be diagnosed over adb.\n" +
                 "  --device-tee/-api/-keymint describe the target device, enabling the\n" +
-                "  device-vs-image assessment (the app reads these from the device itself)."
+                "  device-vs-image assessment (the app reads these from the device itself).\n" +
+                "\n" +
+                "  --donor-init <file> replaces /system/bin/init with the given binary, and\n" +
+                "  --donor-image <gsi.img> takes that binary out of another (raw) GSI.\n" +
+                "  Use one when an image hangs at its own splash despite a correct version\n" +
+                "  patch -- see docs/INIT_SWAP_FIX.md. The donor must come from a GSI that\n" +
+                "  boots on the target device, and cannot be larger than the image's own."
         )
         exitProcess(2)
     }
@@ -62,6 +69,8 @@ private fun run(argv: Array<String>) {
     var teeRelease: String? = null
     var vendorApi: Int? = null
     var keymintVer: Int? = null
+    var donorInitFile: File? = null
+    var donorImageFile: File? = null
 
     var i = 1
     while (i < argv.size) {
@@ -76,6 +85,8 @@ private fun run(argv: Array<String>) {
             "--device-tee" -> teeRelease = argv[++i]
             "--device-api" -> vendorApi = argv[++i].toIntOrNull()
             "--device-keymint" -> keymintVer = argv[++i].toIntOrNull()
+            "--donor-init" -> donorInitFile = File(argv[++i])
+            "--donor-image" -> donorImageFile = File(argv[++i])
             else -> {
                 System.err.println("unknown argument: " + argv[i]); exitProcess(2)
             }
@@ -92,6 +103,35 @@ private fun run(argv: Array<String>) {
             vendorApiLevel = vendorApi,
             keymintAidlVersion = keymintVer
         ) else null
+
+    if (donorInitFile != null && donorImageFile != null) {
+        System.err.println("use --donor-init or --donor-image, not both")
+        exitProcess(2)
+    }
+    // Resolved up front: a bad donor should fail before the image is touched,
+    // not after a multi-gigabyte copy and a hashtree pass.
+    val donorInit: ByteArray? = when {
+        donorInitFile != null -> {
+            if (!donorInitFile.isFile) {
+                System.err.println("no such file: " + donorInitFile); exitProcess(1)
+            }
+            donorInitFile.readBytes()
+        }
+        donorImageFile != null -> {
+            if (!donorImageFile.isFile) {
+                System.err.println("no such file: " + donorImageFile); exitProcess(1)
+            }
+            println("==> extracting " + InitSwap.INIT_PATH + " from " + donorImageFile.name)
+            RandomAccessFile(donorImageFile, "r").use { raf ->
+                ImageIo(raf.channel).use { io -> InitSwap.extractFrom(io) }
+            }
+        }
+        else -> null
+    }
+    if (donorInit != null) {
+        InitSwap.validate(donorInit)
+        println("    donor init: " + donorInit.size + " bytes")
+    }
 
     val started = System.currentTimeMillis()
 
@@ -198,7 +238,7 @@ private fun run(argv: Array<String>) {
         ImageIo(raf.channel).use { io ->
             val report = GsiPatcher.patch(
                 io,
-                GsiPatcher.Options(release, patch, dropFec, enableAdb),
+                GsiPatcher.Options(release, patch, dropFec, enableAdb, donorInit),
                 keyFile?.readBytes(),
                 progress
             )

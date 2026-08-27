@@ -17,7 +17,14 @@ object GsiPatcher {
          * when this goes wrong, so without it a failed boot gives no shell and
          * no logcat. Opt-in: it means any USB host can connect unauthorised.
          */
-        val enableAdb: Boolean = false
+        val enableAdb: Boolean = false,
+        /**
+         * `/system/bin/init` taken from a GSI that boots on the target device.
+         * When set, it replaces the image's own init -- a second, independent
+         * boot blocker from the version properties. See [InitSwap] and
+         * docs/INIT_SWAP_FIX.md. Null leaves init alone.
+         */
+        val donorInit: ByteArray? = null
     )
 
     interface Progress {
@@ -39,7 +46,8 @@ object GsiPatcher {
         val algorithm: String,
         val fecDropped: Boolean,
         val signingKeyReplaced: Boolean,
-        val adbNote: String = "unchanged"
+        val adbNote: String = "unchanged",
+        val initNote: String = "unchanged"
     ) {
         override fun toString(): String = buildString {
             appendLine("partition    : " + partitionName)
@@ -51,7 +59,8 @@ object GsiPatcher {
             appendLine("re-signed    : " + algorithm +
                 if (signingKeyReplaced) " (embedded key replaced with the AOSP test key)" else "")
             appendLine("fec          : " + if (fecDropped) "dropped (descriptor zeroed)" else "unchanged")
-            append("adb          : " + adbNote)
+            appendLine("adb          : " + adbNote)
+            append("init         : " + initNote)
         }
     }
 
@@ -142,7 +151,18 @@ object GsiPatcher {
             patchedPaths.add(p)
             result.changes.forEach { allChanges.add(p + " " + it) }
         }
-        if (totalReplacements == 0) {
+        // Swap init before the "nothing changed" guard below, so an image that
+        // is already version-patched can still be given a known-good init --
+        // the two fixes are independent and an image may need only this one.
+        var initNote = "unchanged"
+        if (options.donorInit != null) {
+            progress.stage("Replacing " + InitSwap.INIT_PATH)
+            val swap = InitSwap.apply(fs, options.donorInit)
+            initNote = swap?.toString()
+                ?: (InitSwap.INIT_PATH + " not present in this image -- nothing to replace")
+        }
+
+        if (totalReplacements == 0 && options.donorInit == null) {
             throw IllegalStateException(
                 "no version properties needed changing: this image already reports release " +
                     options.targetRelease
@@ -242,7 +262,8 @@ object GsiPatcher {
                 else -> "requested, but this image defines neither ro.adb.secure nor " +
                     "ro.debuggable, and a line cannot be added in place -- adb may still " +
                     "be unavailable if it fails to boot"
-            }
+            },
+            initNote = initNote
         )
     }
 }

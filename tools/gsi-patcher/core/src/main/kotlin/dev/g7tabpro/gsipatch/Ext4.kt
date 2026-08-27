@@ -228,6 +228,18 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
      * Overwrite a file's contents in place. The length must be identical, which
      * keeps i_size and the block allocation untouched -- so no inode rewrite and
      * no metadata_csum recomputation is needed.
+     *
+     * **Sparse files are handled, not ignored.** An ext4 file may have holes:
+     * ranges with no block allocated at all, which read back as zeros. Writing
+     * to a hole is impossible without allocating a block, and the extent walk
+     * below simply has nothing to write *to* there -- so before this guard,
+     * bytes landing in a hole were silently discarded and the file read back
+     * with zeros in their place. That is invisible corruption: the write
+     * "succeeds", the hashtree is recomputed over the wrong content, AVB
+     * verifies happily, and the damage only surfaces as an unbootable image.
+     *
+     * Writing zeros into a hole is genuinely lossless (a hole already reads as
+     * zeros), so that case is allowed and skipped. Anything else throws.
      */
     fun writeFileInPlace(ino: Long, data: ByteArray) {
         val inode = readInode(ino)
@@ -235,11 +247,42 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
         require(data.size.toLong() == size) {
             "in-place write needs identical length (have ${data.size}, file is $size)"
         }
+
+        // Which byte ranges of [0, size) are actually backed by blocks.
+        val covered = ArrayList<LongRange>()
+        for (e in extents(inode)) {
+            val fileOff = e.fileBlock * blockSize
+            if (fileOff >= size) continue
+            val n = minOf(e.len.toLong() * blockSize, size - fileOff)
+            covered.add(fileOff until (fileOff + n))
+        }
+        covered.sortBy { it.first }
+
+        var cursor = 0L
+        for (r in covered) {
+            if (r.first > cursor) requireNoDataInHole(data, cursor, r.first, size)
+            cursor = maxOf(cursor, r.last + 1)
+        }
+        if (cursor < size) requireNoDataInHole(data, cursor, size, size)
+
         for (e in extents(inode)) {
             val fileOff = e.fileBlock * blockSize
             if (fileOff >= size) continue
             val n = minOf(e.len.toLong() * blockSize, size - fileOff).toInt()
             io.write(base + e.phys * blockSize, data, fileOff.toInt(), n)
+        }
+    }
+
+    /** Throws if [data] carries anything but zeros in the hole `[from, to)`. */
+    private fun requireNoDataInHole(data: ByteArray, from: Long, to: Long, size: Long) {
+        var nonZero = 0L
+        for (i in from until to) if (data[i.toInt()].toInt() != 0) nonZero++
+        require(nonZero == 0L) {
+            "this file is sparse -- it has a hole at bytes $from..${to - 1} (of $size) with no " +
+                "block allocated, and the new content puts $nonZero non-zero byte(s) there. " +
+                "Writing them would need block allocation, which this in-place patcher does not " +
+                "do; they would otherwise be silently lost and the file would read back with " +
+                "zeros in their place."
         }
     }
 }
