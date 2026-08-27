@@ -4,8 +4,10 @@
 legacy (KeyMint V1 / Keymaster-era) vendor TEE, while other GSIs of the same
 Android version boot fine, try replacing `/system/bin/init` with the one from a
 GSI that *does* boot on that device. Confirmed on a **UMIDIGI G7 Tab Pro**
-(MT6789, TrustKernel TEE, Android 12 / API 31 vendor): Infinity-X 3.12 (A16)
-hung reliably; with Project CiRCLE's `init` swapped in, the same image boots.
+(MT6789, TrustKernel TEE, Android 12 / API 31 vendor) across **three ROMs from
+three separate lineages** — Infinity-X 3.12, crDroid and Lunaris-AOSP 3.12.
+Each was tested both ways: correctly version-patched alone it does not boot;
+with Project CiRCLE's `init` swapped in as well, the same image boots.
 
 This is *not* the version-property fix documented in
 [KEYMINT_OS_VERSION_FIX.md](KEYMINT_OS_VERSION_FIX.md). That fix is still
@@ -98,7 +100,8 @@ baked into a shared GSI init and now runs on every device using that base.
 ## The fix, and what it confirms
 
 Replacing `/system/bin/init` with Circle's copy — changing **nothing else** —
-makes the same Infinity-X image boot. **Confirmed on hardware via DSU.**
+makes the same Infinity-X image boot. **Confirmed on hardware via DSU**, and
+since reproduced on crDroid and Lunaris-AOSP 3.12.
 
 That is a clean single-variable result: identical image, identical version
 patch, identical everything else, one file swapped, opposite outcome.
@@ -202,34 +205,41 @@ same `tdgsi_arm64_ab` base, all from the same maintainer):
 | AviumUI 16.2.1 | required | not needed | yes |
 | LineageOS 23.2 (different maintainer) | required | not needed | yes |
 | Infinity-X 3.12 | applied, correct | **required** | **yes, with swap** |
-| crDroid | applied | used | **yes, with swap** — see caveat |
-| Lunaris-AOSP 3.12 | applied | used | **yes, with swap** — see caveat |
+| crDroid | not enough on its own | **required** | **yes, with swap** |
+| Lunaris-AOSP 3.12 | not enough on its own | **required** | **yes, with swap** |
 
 All three of those were patched **on the device itself**, with the app, using
 Project CiRCLE's init as the donor — no PC involved. Infinity-X's own init is a
 sparse file, so that case also exercised the on-device ext4 block allocation
 and relocation path end to end.
 
-### Read the "with swap" rows carefully
+### All three are controlled results
 
-Only **Infinity-X** is a clean single-variable result. Its version patch was
-directly verified correct at runtime (`ro.keymaster.*.release` = 13 ==
-`ro.build.version.release` = 13, confirmed by live `getprop` on the hung boot)
-and it *still* hung — so the swap is what changed the outcome.
+Each of the three was tested **both ways on the same device**, and in every
+case the version patch alone was not enough:
 
-The other two boot with **version patch + swap together**, and neither has had
-a run with the version patch alone:
+| image | version patch only | + donor init |
+|---|---|---|
+| Infinity-X 3.12 | hangs at splash | boots |
+| crDroid | does not boot | boots |
+| Lunaris-AOSP 3.12 | does not boot | boots |
 
-- **crDroid** previously failed with an *instant DSU revert* — a different
-  signature from a splash hang, and the shape of an AVB/signature rejection
-  rather than a KeyMint one. That test predates **both** the embedded-signing
-  -key fix (v2) and the init swap, so two things changed since.
-- **Lunaris** is ambiguous twice over. The image that booted is **3.12**, a
-  different build from the **3.10** that hung — and that 3.10 image was later
-  found to be **entirely unpatched** (still reporting release 16), so it never
-  tested anything either. Its version patch has never had a run of its own.
+For Infinity-X the version patch was additionally verified correct *at runtime*
+— live `getprop` on the hung boot showed `ro.keymaster.*.release` = 13 ==
+`ro.build.version.release` = 13 — so it hung despite reporting exactly what the
+TEE expected.
 
-So the honest count is **one image where the swap is proven necessary, and two
-where it is merely sufficient in combination**. A run of either with the
-version patch and **no** donor would settle it, and is worth doing before
-citing them as evidence that the init fix generalises across maintainers.
+The no-donor runs used an earlier app build than the with-donor runs, so it is
+worth stating why that is still a controlled comparison: `BuildProp.kt`,
+`Avb.kt` and `HashTree.kt` are **byte-identical** across the two versions, and
+the only changes to the orchestrator were the donor plumbing itself. The
+version-patching, AVB re-signing and hashtree output are therefore the same in
+both; the donor is the variable.
+
+This also retires an older, weaker crDroid data point. It once failed with an
+*instant DSU revert*, which was attributed to a signing-key bug fixed in v2.
+The no-donor test above was run well after that fix and still failed, so the
+signing bug does not explain crDroid.
+
+**Three ROMs, three separate lineages, same result** — so this is not specific
+to one maintainer's build pipeline.

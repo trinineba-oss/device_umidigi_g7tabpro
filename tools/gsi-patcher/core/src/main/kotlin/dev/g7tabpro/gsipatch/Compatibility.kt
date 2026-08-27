@@ -97,16 +97,15 @@ object Compatibility {
             "Infinity-X 2.9 reverted instantly under DSU. That test predates the signing-key " +
                 "fix, so it is worth retrying before believing it."),
         Tested(Regex("lunaris", RegexOption.IGNORE_CASE), null, true,
-            "Lunaris-AOSP 3.12 BOOTS with the version patch plus a donor init (confirmed on " +
-                "hardware). Whether the init swap was needed is untested twice over: this is a " +
-                "different build from the 3.10 that hung, and that 3.10 image was later found " +
-                "to be entirely unpatched anyway, so the version patch alone has never had a " +
-                "run of its own on this ROM."),
+            "Lunaris-AOSP 3.12 needs BOTH fixes. Version patch alone: does not boot. Version " +
+                "patch + donor init: boots. Both confirmed on hardware, and the patching path " +
+                "is byte-identical between the two builds tested, so the donor is the variable."),
         Tested(Regex("crdroid", RegexOption.IGNORE_CASE), null, true,
-            "crDroid BOOTS with the version patch plus a donor init (confirmed on hardware). " +
-                "Note its earlier instant-revert failure predates BOTH the embedded-signing-key " +
-                "fix and the init swap, so which of the two unblocked it is not established -- " +
-                "the combination is what was tested."),
+            "crDroid needs BOTH fixes. Version patch alone: does not boot. Version patch + " +
+                "donor init: boots. Both confirmed on hardware with builds whose patching path " +
+                "is byte-identical, so the donor is the variable. (This also retires the older " +
+                "instant-revert result, which predated the embedded-signing-key fix -- the " +
+                "no-donor test above was run well after that fix, and still failed.)"),
         Tested(Regex("phh|peter", RegexOption.IGNORE_CASE), null, true,
             "phh-based builds boot without patching -- they spoof the version themselves.")
     )
