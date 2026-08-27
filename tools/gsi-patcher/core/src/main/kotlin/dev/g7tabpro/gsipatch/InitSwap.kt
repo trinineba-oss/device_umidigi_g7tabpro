@@ -51,10 +51,17 @@ object InitSwap {
     private const val ELFCLASS64 = 2
     private const val EM_AARCH64 = 183
 
-    class Result(val donorSize: Int, val destSize: Int, val padding: Int) {
+    class Result(
+        val donorSize: Int,
+        val destSize: Int,
+        val padding: Int,
+        val relocated: Boolean = false
+    ) {
         override fun toString(): String =
             "replaced (donor " + donorSize + " bytes, padded with " + padding +
-                " zero byte(s) to the destination's " + destSize + ")"
+                " zero byte(s) to the destination's " + destSize + ")" +
+                if (relocated) " -- relocated to fresh blocks (the image's own init was sparse)"
+                else ""
     }
 
     /**
@@ -117,22 +124,19 @@ object InitSwap {
         }
 
         val padded = if (donor.size == destSize) donor else donor.copyOf(destSize)
+        var relocated = false
         try {
             fs.writeFileInPlace(ino, padded)
         } catch (e: IllegalArgumentException) {
-            // Overwhelmingly the sparse-hole case, and worth translating: the
-            // low-level message is accurate but does not tell the user what to
-            // do about it. Measured on a real pair (Project CiRCLE's init into
-            // Infinity-X 3.12): the destination has holes at blocks 111,
-            // 637-639 and 647, and the donor carries 7,514 non-zero bytes in
-            // them, so an in-place swap is genuinely impossible here.
-            throw IllegalArgumentException(
-                "cannot swap init in place: " + e.message + "\n" +
-                    "The image's own init is a sparse file and the donor has real data where " +
-                    "the holes are. Use the loop-mount recipe in docs/INIT_SWAP_FIX.md, which " +
-                    "lets the kernel allocate the missing blocks.",
-                e
-            )
+            // The sparse-hole case: the destination has holes and the donor has
+            // real data in them, so there is nowhere in the existing blocks to
+            // put those bytes. Measured on the real pair (Project CiRCLE's init
+            // into Infinity-X 3.12): holes at blocks 111, 637-639 and 647
+            // holding 7,514 non-zero donor bytes. Relocating to fresh blocks is
+            // the way through; it also avoids writing into any deduplicated
+            // block, which the in-place path cannot rule out.
+            fs.writeFileRelocated(ino, padded)
+            relocated = true
         }
 
         // Never trust the write: read it back. A silently-dropped byte here
@@ -142,6 +146,6 @@ object InitSwap {
         require(readBack.size == padded.size && readBack.contentEquals(padded)) {
             "init did not read back as written -- refusing to continue; the image is not safe to use"
         }
-        return Result(donor.size, destSize, destSize - donor.size)
+        return Result(donor.size, destSize, destSize - donor.size, relocated)
     }
 }

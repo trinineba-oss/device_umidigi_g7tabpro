@@ -40,6 +40,20 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
     private val descSize: Int
     private val groupDescOffset: Long
 
+    // Only needed by the allocator (see Ext4Alloc.kt). Parsed here because the
+    // superblock is read once, in init.
+    internal val blocksPerGroup: Long
+    internal val groupCount: Long
+    internal val hasMetadataCsum: Boolean
+    internal val hasGdtCsum: Boolean
+    internal val sbOffset: Long get() = base + 1024
+    internal val imageBase: Long get() = base
+    internal val ioRef: ImageIo get() = io
+    internal val descSizeRef: Int get() = descSize
+    internal val groupDescOffsetRef: Long get() = groupDescOffset
+    internal val inodeSizeRef: Int get() = inodeSize
+    internal val inodesPerGroupRef: Int get() = inodesPerGroup
+
     private class Extent(val fileBlock: Long, val phys: Long, val len: Int)
 
     init {
@@ -69,7 +83,28 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
         val is64bit = (incompat and 0x80L) != 0L
         descSize = if (is64bit) sb.le16(0xFE).let { if (it == 0) 64 else it } else 32
         groupDescOffset = base + (firstDataBlock + 1) * blockSize
+
+        blocksPerGroup = sb.le32(0x20)
+        val blocksCount = sb.le32(0x04) or (if (is64bit) sb.le32(0x150) shl 32 else 0L)
+        groupCount =
+            if (blocksPerGroup <= 0) 0L
+            else (blocksCount - firstDataBlock + blocksPerGroup - 1) / blocksPerGroup
+        val roCompat = sb.le32(0x64)
+        hasMetadataCsum = (roCompat and 0x400L) != 0L
+        hasGdtCsum = (roCompat and 0x010L) != 0L
     }
+
+    /** Byte offset of [ino]'s on-disk inode, so the allocator can write it back. */
+    internal fun inodeOffset(ino: Long): Long {
+        val group = (ino - 1) / inodesPerGroup
+        val index = ((ino - 1) % inodesPerGroup).toInt()
+        val gd = io.read(groupDescOffset + group * descSize, descSize)
+        var table = gd.le32(0x08)
+        if (descSize >= 64) table = table or (gd.le32(0x28) shl 32)
+        return base + table * blockSize + index.toLong() * inodeSize
+    }
+
+    internal fun readInodeRaw(ino: Long): ByteArray = readInode(ino)
 
     private fun readInode(ino: Long): ByteArray {
         val group = (ino - 1) / inodesPerGroup
@@ -271,6 +306,33 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
             val n = minOf(e.len.toLong() * blockSize, size - fileOff).toInt()
             io.write(base + e.phys * blockSize, data, fileOff.toInt(), n)
         }
+    }
+
+    /**
+     * Replaces a file's contents by **relocating** it to freshly allocated
+     * blocks, for the case [writeFileInPlace] cannot handle: the destination is
+     * sparse and the new content has real data where its holes are.
+     *
+     * Unlike the in-place path this changes metadata (extent tree, i_blocks,
+     * i_size) and consumes free space, so it is opt-in rather than an automatic
+     * fallback. The file's inode is kept, so its xattrs -- crucially the
+     * SELinux label -- are untouched. See [Ext4Alloc] for why the old blocks
+     * are abandoned rather than freed.
+     */
+    fun writeFileRelocated(ino: Long, data: ByteArray) {
+        val needed = (data.size + blockSize - 1) / blockSize
+        val run = Ext4Alloc.allocateContiguous(this, needed)
+            ?: throw IllegalStateException(
+                "no contiguous run of $needed free blocks is available to relocate this file into"
+            )
+        // Write the content first: if anything below fails, the inode still
+        // points at the old blocks and the image is unchanged apart from some
+        // blocks marked in use.
+        // Write straight out of `data` at the matching offset. Copying a chunk
+        // and passing offset 0 instead is how this got written the first time,
+        // and it silently put block 0's bytes into every block.
+        io.write(base + run.start * blockSize, data, 0, data.size)
+        Ext4Alloc.repointToSingleExtent(this, ino, run, data.size.toLong())
     }
 
     /** Throws if [data] carries anything but zeros in the hole `[from, to)`. */
