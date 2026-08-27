@@ -24,6 +24,7 @@ import dev.g7tabpro.gsipatch.Compatibility
 import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
 import dev.g7tabpro.gsipatch.ImageIo
+import dev.g7tabpro.gsipatch.InitSwap
 import dev.g7tabpro.gsipatch.Ingest
 import dev.g7tabpro.gsipatch.DeviceFacts
 import dev.g7tabpro.gsipatch.Preflight
@@ -42,10 +43,12 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_INPUT = 1
         const val REQ_OUTPUT = 2
+        const val REQ_DONOR = 3
     }
 
     private var inputUri: Uri? = null
     private var outputUri: Uri? = null
+    private var donorUri: Uri? = null
     private var working = false
 
     private lateinit var inputBtn: Button
@@ -53,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var patchBtn: Button
     private lateinit var checkBtn: Button
     private lateinit var adbBox: CheckBox
+    private lateinit var donorBtn: Button
     private lateinit var device: DeviceFacts
     private lateinit var releaseField: EditText
     private lateinit var patchField: EditText
@@ -119,6 +123,15 @@ class MainActivity : Activity() {
         }
         root.addView(adbBox)
 
+        // Optional, and deliberately outside the numbered 1-2-3 flow: most
+        // images never need it. It is for the case where a GSI hangs at its own
+        // splash despite a correct version patch -- see docs/INIT_SWAP_FIX.md.
+        donorBtn = Button(this).apply {
+            text = "Optional: replace init (donor GSI or init file)"
+            setOnClickListener { pickDonor() }
+        }
+        root.addView(donorBtn)
+
         patchBtn = Button(this).apply {
             text = "3. Patch"
             isEnabled = false
@@ -172,6 +185,43 @@ class MainActivity : Activity() {
         startActivityForResult(i, REQ_OUTPUT)
     }
 
+    private fun pickDonor() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        startActivityForResult(i, REQ_DONOR)
+    }
+
+    /**
+     * Accepts either a bare `init` binary or a whole (raw, uncompressed) GSI to
+     * take one out of, deciding by magic bytes rather than asking the user which
+     * they picked. A GSI's own init is exactly what a donor is, so requiring
+     * them to extract it first would be busywork -- and the maintainers who
+     * hand these out distribute both shapes.
+     */
+    private fun resolveDonor(uri: Uri): ByteArray {
+        val head = contentResolver.openInputStream(uri)?.use { readHeadBytes(it, 8) }
+            ?: throw IllegalStateException("cannot read the donor file")
+        val isElf = head.size >= 4 && head[0].toInt() == 0x7F &&
+            head[1].toInt() == 'E'.code && head[2].toInt() == 'L'.code && head[3].toInt() == 'F'.code
+        if (isElf) {
+            return contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: throw IllegalStateException("cannot read the donor file")
+        }
+        // Not an ELF, so treat it as an image and go looking inside. Needs
+        // random access, which a compressed source cannot give without being
+        // decompressed first -- say so plainly rather than failing deep in ext4.
+        val pfd = contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalStateException(
+                "that donor is not an init binary, and this location cannot be read directly " +
+                    "to search it as an image"
+            )
+        return pfd.use {
+            ImageIo(FileInputStream(it.fileDescriptor).channel).use { io -> InitSwap.extractFrom(io) }
+        }
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK || data?.data == null) return
@@ -188,6 +238,34 @@ class MainActivity : Activity() {
                 outputUri = uri
                 outputBtn.text = "2. Save as: " + displayName(uri)
                 patchBtn.isEnabled = true
+            }
+            REQ_DONOR -> {
+                // Resolve and validate now, not at patch time: extracting from a
+                // multi-gigabyte donor can take a moment, and a wrong file
+                // should be rejected while the user is still looking at the
+                // picker rather than halfway through a patch.
+                donorBtn.isEnabled = false
+                Thread {
+                    try {
+                        val donor = resolveDonor(uri)
+                        InitSwap.validate(donor)
+                        donorUri = uri
+                        runOnUiThread {
+                            donorBtn.text = "Optional: init from " + displayName(uri)
+                            donorBtn.isEnabled = true
+                        }
+                        appendLog(
+                            "donor init: " + donor.size + " bytes from " + displayName(uri)
+                        )
+                    } catch (t: Throwable) {
+                        donorUri = null
+                        runOnUiThread {
+                            donorBtn.text = "Optional: replace init (donor GSI or init file)"
+                            donorBtn.isEnabled = true
+                        }
+                        appendLog("donor rejected: " + (t.message ?: t.toString()))
+                    }
+                }.start()
             }
         }
     }
@@ -233,6 +311,7 @@ class MainActivity : Activity() {
         checkBtn.isEnabled = false
         inputBtn.isEnabled = false
         outputBtn.isEnabled = false
+        donorBtn.isEnabled = false
         progress.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -434,7 +513,10 @@ class MainActivity : Activity() {
             ImageIo(readCh, writeCh).use { io ->
                 val report = GsiPatcher.patch(
                     io,
-                    GsiPatcher.Options(release, patch, dropFec = true, enableAdb = adbBox.isChecked),
+                    GsiPatcher.Options(
+                    release, patch, dropFec = true, enableAdb = adbBox.isChecked,
+                    donorInit = donorUri?.let { resolveDonor(it) }
+                ),
                     key,
                     object : GsiPatcher.Progress {
                         override fun stage(message: String) {
@@ -478,6 +560,7 @@ class MainActivity : Activity() {
             checkBtn.isEnabled = inputUri != null
             inputBtn.isEnabled = true
             outputBtn.isEnabled = true
+            donorBtn.isEnabled = true
             progress.visibility = View.INVISIBLE
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
