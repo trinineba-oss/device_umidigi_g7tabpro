@@ -132,17 +132,43 @@ two failing images and neither booting one.
 
 That is a clean 2-vs-2 correlation on a specific, plausible mechanism: opening
 a raw block device and running `ioctl`/`lseek` inside `init`, in a race decided
-by ~2 ms. But it remains a **correlation over four images**, and string
-presence proves the code is *compiled in*, not that it *executes* at the
-critical moment. Two things would settle it, neither done yet:
+by ~2 ms.
 
-- disassemble Infinity's init and confirm `GetVbmetaSize` is actually reached
-  on the first-stage path (rather than being dead or late-bound code);
-- neuter just that code path in Infinity's own init and see whether that alone
-  makes it boot.
+### Disassembly: the code is real, and it runs on the property-load path
 
-Until one of those lands, describe the vbmeta code as **the strongest candidate,
-consistent with every image tested** — not as the confirmed cause.
+A string proves code is *compiled in*, not that it *runs*. Disassembling
+Infinity's init (llvm-objdump, ARM64) settles that part:
+
+- The `GetVbmetaSize` strings are referenced by actual instructions at
+  `0xfdbc4` and `0xfe0fc` — `adrp`/`add` pairs materialising their addresses.
+  **Not dead strings.**
+- They sit inside the function entered at `0xfa4ec`, which is reached through a
+  5-deep call chain: `0xfa4ec ← 0x100414 ← 0xd9fa8 ← 0x98034 ← 0x95dc0 ←
+  0x75d4c`. The three innermost links each have exactly **one** call site, so
+  that part of the chain is unambiguous.
+- What that function *is* comes from the other strings it references:
+  `(Loading properties from`, `' in property file '`, `while loading .prop
+  files`, `/build.prop`, `/default.prop`, `.build.version.sdk`. That is init's
+  **property-loading** routine.
+
+So the vbmeta probe is not late, rare or dead code — it executes while init is
+loading boot properties, **early in second stage, on every boot, before
+services start**. That is exactly the window the registration race lives in.
+
+### What is still not proven
+
+That the probe is *slow enough* to move the race by the required margin. Opening
+`/dev/block/by-name/vbmeta` and running `ioctl(BLKGETSIZE64)`/`lseek` is
+plausibly slow on a device whose bootloader does not populate `ro.boot.vbmeta.*`
+(so it takes the failing path, with its extra logging), but *plausible* is not
+*measured*, and that measurement needs the device.
+
+The remaining decisive test is cheap: neuter only this code path in Infinity's
+own init — everything else identical — and see whether that alone makes it boot.
+The PC can build that image; one DSU attempt answers it.
+
+Until then: **strongest candidate, consistent with every image tested and
+confirmed to execute on the relevant path** — but not the proven cause.
 
 ## How to apply it
 
