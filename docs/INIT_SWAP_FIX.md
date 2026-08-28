@@ -397,6 +397,35 @@ Project CiRCLE's init as the donor — no PC involved. Infinity-X's own init is 
 sparse file, so that case also exercised the on-device ext4 block allocation
 and relocation path end to end.
 
+### Where this fix does NOT apply
+
+**Axion 2.8 reverts instantly under DSU, with or without the init swap.** That
+is a different failure entirely and worth naming so the fix is not mistaken for
+a universal one.
+
+An instant revert means the image is rejected at or before load — it never
+reaches a GSI splash, so `init` never runs and replacing it cannot possibly
+help. Confirmed: 2.8 still reverts with Project CiRCLE's init swapped in. It
+matches Axion 2.7's older behaviour, so this is longstanding rather than a
+regression.
+
+The failure shape is the diagnostic:
+
+| shape | meaning | does the init swap help? |
+|---|---|---|
+| hangs at the **GSI's own splash** | boot reached userspace; KeyMint/`/data` failure | **yes** — this is the case this document is about |
+| **instant revert** to the previous ROM | image rejected at/before load | no — init never runs |
+| hangs at the **OEM splash** | fails earlier still, before the GSI is entered | no |
+
+For an instant revert, look at the DSU side — `gsid` and logcat during install
+and first boot — rather than at version properties or init.
+
+Curiously, Axion's own init is an outlier in the comparison below: it carries
+the `GetVbmeta*` routines (9 strings) but **none** of the `ro.secureboot.*` or
+`ro.is_ever_orange` properties, and it is ~34 KB larger than any other init
+sampled. That is a different build variant again — but since swapping its init
+out changes nothing, it is a curiosity here, not the cause.
+
 ### All three are controlled results
 
 Each of the three was tested **both ways on the same device**, and in every

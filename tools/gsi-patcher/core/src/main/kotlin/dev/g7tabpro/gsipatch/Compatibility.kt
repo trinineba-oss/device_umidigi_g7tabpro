@@ -81,11 +81,12 @@ object Compatibility {
         Tested(Regex("avium", RegexOption.IGNORE_CASE), 36, true,
             "AviumUI (sdk 36) boots once patched, verified via DSU."),
         Tested(Regex("axion", RegexOption.IGNORE_CASE), null, false,
-            "Axion 2.7 reverted instantly under DSU -- a different failure shape from Infinity-X " +
-                "and Lunaris, which patch correctly and hang at the splash instead. An instant " +
-                "revert matches what an AVB/signature rejection looks like, so check the patcher " +
-                "version used before assuming this image cannot work: v1 never replaced a " +
-                "maintainer's own embedded signing key, which fails exactly this way."),
+            "Axion reverts INSTANTLY under DSU -- 2.7 and, on current tooling, 2.8. That is a " +
+                "different failure from the splash hang: the image is rejected at or before " +
+                "load, so init never runs and the donor-init fix cannot help (confirmed -- 2.8 " +
+                "still reverts WITH Project CiRCLE's init swapped in). Not a KeyMint problem. " +
+                "Diagnose it from the DSU side instead: gsid/logcat during install and first " +
+                "boot, not the version props or init."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 36, true,
             "Infinity-X 3.12 BOOTS once its /system/bin/init is replaced with one from a GSI " +
                 "that boots here (confirmed on hardware). The version patch alone is not enough: " +
