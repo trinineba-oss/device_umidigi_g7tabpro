@@ -155,17 +155,62 @@ So the vbmeta probe is not late, rare or dead code — it executes while init is
 loading boot properties, **early in second stage, on every boot, before
 services start**. That is exactly the window the registration race lives in.
 
-### What is still not proven
+### Tested on hardware: the timing theory is WRONG
 
-That the probe is *slow enough* to move the race by the required margin. Opening
-`/dev/block/by-name/vbmeta` and running `ioctl(BLKGETSIZE64)`/`lseek` is
-plausibly slow on a device whose bootloader does not populate `ro.boot.vbmeta.*`
-(so it takes the failing path, with its extra logging), but *plausible* is not
-*measured*, and that measurement needs the device.
+Infinity's own init was rebuilt with the vbmeta device path repointed at a
+non-existent node (6 bytes changed, everything else byte-identical), so the
+`open()` fails instantly and the `ioctl`/`lseek` never run. **It still hung.**
 
-The remaining decisive test is cheap: neuter only this code path in Infinity's
-own init — everything else identical — and see whether that alone makes it boot.
-The PC can build that image; one DSU attempt answers it.
+So the cost of the probe is not the mechanism, and by extension the "extra
+early-boot work loses a timing race" explanation does not survive its first
+real test. Worth stating plainly because that theory had been the working
+assumption for days.
+
+### The better hypothesis: fabricated root-of-trust values
+
+Re-reading the strings after that failure shows why the test was inadequate —
+when the device open fails, the code **still sets the property**:
+
+```
+GetVbmetaDigest: Property 'ro.boot.vbmeta.digest' set successfully to dynamic fallback value '
+```
+
+So the patch only changed *which* value got written, not *whether* one was.
+
+And the probe is not an isolated oddity. Comparing strings across five inits —
+three that boot (Project CiRCLE, AviumUI, and the maintainer's own distributed
+"working init") against the two that fail — the entire functional difference is
+**17 strings**, and every meaningful one is verified-boot related:
+
+```
+ro.boot.vbmeta.            (prefix, used to build names dynamically)
+ro.is_ever_orange
+ro.secureboot.devicelock
+ro.secureboot.lockstate
+```
+
+The *full* names (`ro.boot.vbmeta.digest` and friends) appear in the working
+inits too — that is ordinary kernel-cmdline handling. Only the **prefix** is
+unique to the failing ones, i.e. only they contain code that *synthesises*
+these names and sets them.
+
+This matters because this device's bootloader does **not** publish those
+properties, and the vendor KeyMint HAL reads exactly
+`ro.boot.vbmeta.device_state`, `ro.boot.vbmeta.digest` and
+`ro.boot.verifiedbootstate` to compute its root of trust. An init that
+fabricates them hands the TA a root of trust the device never actually had.
+
+It also fits an observation the timing theory never explained: the failures are
+**perfectly deterministic** (2/2, 3/3 on repeat attempts). A race should be
+flaky; a wrong constant should not be.
+
+### Next test
+
+Same shape, better aim: Infinity's own init with only the *synthesised*
+property names redirected to inert ones (`ro.boot.vbmeta.` -> `ro.zzzz.vbmeta.`
+etc., 7 bytes, length-preserving), leaving legitimate cmdline handling intact.
+If that boots, fabricated root-of-trust values are the cause. Published as
+`inf_init_norot` on the `gsi-patcher-v5.1` release.
 
 Until then: **strongest candidate, consistent with every image tested and
 confirmed to execute on the relevant path** — but not the proven cause.
