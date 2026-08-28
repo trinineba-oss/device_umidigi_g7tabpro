@@ -112,15 +112,37 @@ patch, identical everything else, one file swapped, opposite outcome.
 non-booting images in this family. Swapping a known-good one is an effective
 fix.
 
-**Not yet proven:** *which part* of init is responsible. The two binaries differ
-by 2M+ bytes — they are separate builds, not one patch — so attributing it
-specifically to the vbmeta-probing code above is a strong inference from the
-mechanism (extra early-boot block I/O in the one process that runs before
-everything else, in a race decided by milliseconds), **not a measurement**. A
-targeted test — patching out only that code path, or capturing early-boot
-logcat from the now-booting swapped image to confirm the HAL registers and the
-TA loads — would settle it. Until then, do not state the vbmeta code as the
-confirmed cause.
+**Narrowed, but still not proven:** *which part* of init is responsible.
+
+Comparing the init from four ROMs with known outcomes on this device — all four
+from the same maintainer, so build pipeline and toolchain are controlled —
+isolates it to one function family:
+
+| init | boots? | `/dev/block/by-name/vbmeta`, `oplusboot.verifiedbootstate` | `GetVbmetaSize` / `GetVbmetaDigest` |
+|---|---|---|---|
+| Project CiRCLE 1.2 | yes | absent | absent |
+| AviumUI 16.2.1 | yes | **present** | **absent** |
+| Infinity-X 3.12 | no | present | **present (10 strings)** |
+| Lunaris-AOSP | no | present | **present (10 strings)** |
+
+AviumUI is what makes this informative. It carries the vbmeta device path and
+the `oplusboot` property name yet still boots, so those constants alone are
+harmless — while the `GetVbmeta*` probe-and-log routines appear in exactly the
+two failing images and neither booting one.
+
+That is a clean 2-vs-2 correlation on a specific, plausible mechanism: opening
+a raw block device and running `ioctl`/`lseek` inside `init`, in a race decided
+by ~2 ms. But it remains a **correlation over four images**, and string
+presence proves the code is *compiled in*, not that it *executes* at the
+critical moment. Two things would settle it, neither done yet:
+
+- disassemble Infinity's init and confirm `GetVbmetaSize` is actually reached
+  on the first-stage path (rather than being dead or late-bound code);
+- neuter just that code path in Infinity's own init and see whether that alone
+  makes it boot.
+
+Until one of those lands, describe the vbmeta code as **the strongest candidate,
+consistent with every image tested** — not as the confirmed cause.
 
 ## How to apply it
 
