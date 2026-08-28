@@ -206,6 +206,46 @@ It also fits an observation the timing theory never explained: the failures are
 **perfectly deterministic** (2/2, 3/3 on repeat attempts). A race should be
 flaky; a wrong constant should not be.
 
+### The maintainer's own "working init", analysed
+
+A user supplied the file Doze-off's release notes tell people to install —
+verified byte-identical to the standalone `init` asset published on the
+CiRCLE, Infinity-X and Axion releases (sha256 `f52af0f7…`, 2,725,064 bytes).
+Analysing it directly is worthwhile, because it is an **independent** known-good
+sample: not one of the ROM inits this investigation started from.
+
+Two findings.
+
+**1. It confirms the correlation, now 3-vs-2 and complete.**
+
+| init | boots | `GetVbmeta*` | `ro.secureboot.*` | `ro.is_ever_orange` | `ro.boot.vbmeta.` prefix |
+|---|---|---|---|---|---|
+| Project CiRCLE | yes | 0 | 0 | 0 | 0 |
+| AviumUI | yes | 0 | 0 | 0 | 0 |
+| **Doze-off's fix init** | yes | **0** | **0** | **0** | **0** |
+| Infinity-X 3.12 | no | 10 | 2 | 1 | 1 |
+| Lunaris-AOSP | no | 10 | 2 | 1 | 1 |
+
+Every init that boots carries **none** of the verified-boot synthesis; both
+that fail carry **all** of it. No exceptions in either direction.
+
+**2. It is a debug-featured init — and that is *not* the mechanism.**
+
+It uniquely contains `/first_stage.sh`, `/data/local.prop`,
+`androidboot.first_stage_console`, `/system/bin/lsof`, and
+`Permissive SELinux boot, forcing sys.init.perf_lsm_hooks to 1`. That is a
+development/rescue build, which fits its purpose as a file handed to users whose
+device will not boot.
+
+It would be easy to conclude the permissive/debug behaviour is what rescues the
+boot. It is not: **Circle and AviumUI contain none of those strings and boot
+perfectly.** The debug features are incidental to why it works.
+
+Practical consequence: prefer **Circle's** init as a donor. It is the leaner
+file, has no first-stage shell hook, no `/data/local.prop` reading and no
+permissive-boot path, and it is equally effective. Doze-off's init is the right
+choice only if you specifically want those rescue features.
+
 ### Next test
 
 Same shape, better aim: Infinity's own init with only the *synthesised*
