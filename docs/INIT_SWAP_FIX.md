@@ -246,6 +246,54 @@ file, has no first-stage shell hook, no `/data/local.prop` reading and no
 permissive-boot path, and it is equally effective. Doze-off's init is the right
 choice only if you specifically want those rescue features.
 
+### Two failed attempts at isolating the cause — and what they teach
+
+Both were binary patches to Infinity's own init, tested on hardware. Both
+failed, and **both failed because the patch did not do what I claimed**, not
+because the hypothesis was wrong. Recorded in full because the pattern is the
+lesson.
+
+**Attempt 1 — repoint the vbmeta device path** (6 bytes). Made `open()` fail so
+the `ioctl`/`lseek` never run. Still hung. But the strings say why it proved
+nothing: on open failure the code *still sets the property*, from a fallback —
+`Property 'ro.boot.vbmeta.digest' set successfully to dynamic fallback value`.
+It changed which value was written, not whether one was.
+
+**Attempt 2 — rename the property prefix** (7 bytes): `ro.boot.vbmeta.` ->
+`ro.zzzz.vbmeta.`, plus `ro.is_ever_orange` and `ro.secureboot.*`. Still hung.
+Disassembly afterwards showed the vbmeta function references the **full** names
+—`ro.boot.vbmeta.device_state`, `.digest`, `.size` — and never the prefix. So
+the three properties that actually feed the HAL's root of trust were still
+being set. Only the two secondary ones were neutralised.
+
+**The lesson, stated once so it is not repeated a third time:** confirm which
+string the *code references* before patching it. String presence in the binary
+says nothing about which copy a given call site uses, and a patch that misses
+costs a full flash-and-boot cycle to discover.
+
+**So the root-of-trust hypothesis is NOT disproven** — it has not yet been
+tested. Only the timing theory has actually been falsified.
+
+### Before patching again: just look
+
+The hypothesis predicts something directly observable, with no binary surgery
+at all. On the hung boot, with adb (Infinity ships `/adb_keys`, so it authorises
+without `/data`):
+
+```sh
+adb shell getprop | grep -E "vbmeta|secureboot|is_ever_orange|verifiedboot"
+```
+
+- If `ro.boot.vbmeta.digest` / `.device_state` hold **synthesised values** on the
+  hanging boot and are **absent or bootloader-supplied** on a working one
+  (Project CiRCLE), the hypothesis is confirmed outright.
+- If they look the same on both, it is dead, and the difference is elsewhere in
+  init.
+
+Either way it costs one boot and no guessing. A corrected patch
+(`inf_init_norot2`, 19 bytes, the full names redirected) is published for
+afterwards, but the observation should come first.
+
 ### Next test
 
 Same shape, better aim: Infinity's own init with only the *synthesised*
