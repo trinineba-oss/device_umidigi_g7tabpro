@@ -101,11 +101,12 @@ object Compatibility {
                 "patch + donor init: boots. Both confirmed on hardware, and the patching path " +
                 "is byte-identical between the two builds tested, so the donor is the variable."),
         Tested(Regex("crdroid", RegexOption.IGNORE_CASE), null, true,
-            "crDroid needs BOTH fixes. Version patch alone: does not boot. Version patch + " +
-                "donor init: boots. Both confirmed on hardware with builds whose patching path " +
-                "is byte-identical, so the donor is the variable. (This also retires the older " +
-                "instant-revert result, which predated the embedded-signing-key fix -- the " +
-                "no-donor test above was run well after that fix, and still failed.)"),
+            "crDroid needs BOTH fixes -- confirmed on hardware for crDroid 10 and, separately, " +
+                "crDroid 11. Version patch alone: does not boot. Version patch + donor init: " +
+                "boots. The builds compared have a byte-identical patching path, so the donor " +
+                "is the variable. (This also retires the older instant-revert result, which " +
+                "predated the embedded-signing-key fix -- the no-donor test was run well after " +
+                "that fix and still failed.)"),
         Tested(Regex("phh|peter", RegexOption.IGNORE_CASE), null, true,
             "phh-based builds boot without patching -- they spoof the version themselves.")
     )

@@ -4,8 +4,9 @@
 legacy (KeyMint V1 / Keymaster-era) vendor TEE, while other GSIs of the same
 Android version boot fine, try replacing `/system/bin/init` with the one from a
 GSI that *does* boot on that device. Confirmed on a **UMIDIGI G7 Tab Pro**
-(MT6789, TrustKernel TEE, Android 12 / API 31 vendor) across **three ROMs from
-three separate lineages** — Infinity-X 3.12, crDroid and Lunaris-AOSP 3.12.
+(MT6789, TrustKernel TEE, Android 12 / API 31 vendor) across **four ROMs from
+three separate lineages** — Infinity-X 3.12, crDroid 10, crDroid 11 and
+Lunaris-AOSP 3.12.
 Each was tested both ways: correctly version-patched alone it does not boot;
 with Project CiRCLE's `init` swapped in as well, the same image boots.
 
@@ -101,7 +102,8 @@ baked into a shared GSI init and now runs on every device using that base.
 
 Replacing `/system/bin/init` with Circle's copy — changing **nothing else** —
 makes the same Infinity-X image boot. **Confirmed on hardware via DSU**, and
-since reproduced on crDroid and Lunaris-AOSP 3.12.
+since reproduced on crDroid 10, crDroid 11 and Lunaris-AOSP 3.12 — the crDroid
+11 case done entirely in the app on the tablet, on a fresh non-booting image.
 
 That is a clean single-variable result: identical image, identical version
 patch, identical everything else, one file swapped, opposite outcome.
@@ -298,7 +300,8 @@ same `tdgsi_arm64_ab` base, all from the same maintainer):
 | AviumUI 16.2.1 | required | not needed | yes |
 | LineageOS 23.2 (different maintainer) | required | not needed | yes |
 | Infinity-X 3.12 | applied, correct | **required** | **yes, with swap** |
-| crDroid | not enough on its own | **required** | **yes, with swap** |
+| crDroid 10 | not enough on its own | **required** | **yes, with swap** |
+| crDroid 11 | not enough on its own | **required** | **yes, with swap** |
 | Lunaris-AOSP 3.12 | not enough on its own | **required** | **yes, with swap** |
 
 All three of those were patched **on the device itself**, with the app, using
