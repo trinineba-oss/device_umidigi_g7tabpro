@@ -268,3 +268,48 @@ a Linux box, root, a loop mount and ~15 minutes. It is now a few taps in the
 on-device app, proven across four ROMs. The convenience this buys has shrunk
 considerably, while the risk — `fastboot flash vendor` with `--disable-verity`,
 and a real chance of losing `/data` — has not.
+
+## A second payoff: this may also unblock TWRP `/data` decryption
+
+Not considered when this was designed, and it materially affects whether the
+patch is worth flashing.
+
+TWRP's recorded `/data` failure is the same bug in the other direction.
+Keymaster binds `OS_VERSION` into a key's authorisation list at creation and
+validates it on *use*. `/data`'s keys were created while the system reported
+**13**; a `twrp-12.1` recovery reports **12**, so the TA refuses to unwrap them
+— matching the symptom exactly ("hung trying to decrypt /data, stuck on the
+splash, no crash").
+
+The relevant point is that **recovery uses the same vendor HAL**:
+
+- `recovery.fstab` mounts `/vendor` from `/dev/block/mapper/vendor`
+- `init.recovery.mt6789.rc` imports `init.recovery.keymaster_gatekeeper.rc`
+- the vendor ships `android.hardware.security.keymint-service.trustkernel`,
+  backed by the same `libkeymint.so` this patch modifies
+
+So with the patch installed, the HAL reads `ro.vendor.kmosver` (13) instead of
+the recovery's own `ro.build.version.release` (12) — and reports 13 **regardless
+of what the running system claims**. That is arguably more robust than the
+`RELEASE_PLATFORM_VERSION := 13` approach sketched in `BoardConfig.mk`, since it
+does not depend on the recovery's reported version at all.
+
+**Two assumptions, neither verified — check before relying on this:**
+
+1. **Does recovery's init parse `/vendor/build.prop`?** Recovery loads a
+   narrower set of property files than a full boot. If it does not,
+   `ro.vendor.kmosver` is unset and `property_get` returns empty — which is
+   exactly the failure that caused the original bootloop.
+2. **Does recovery load `/vendor/etc/selinux/vendor_property_contexts`?** If
+   not, the property falls back to an unreadable label for the HAL's domain —
+   again the precise bug this document exists to fix.
+
+Both are answerable by unpacking the `vendor_boot` ramdisk, with nothing
+flashed.
+
+**Recommended order regardless:** try the TWRP-side fix first.
+`RELEASE_PLATFORM_VERSION := 13` is a build-time change with **zero flash
+risk**, the crypto flags are already re-enabled in the tree, and TWRP builds run
+in CI. If that works, `/data` decryption is solved without touching the vendor
+partition. This patch's recovery benefit is a reason to keep it on the table,
+not a reason to accept a `/data`-risking flash before the free option is tried.
