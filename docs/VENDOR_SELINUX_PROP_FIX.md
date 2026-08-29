@@ -214,3 +214,57 @@ watching for `-64 KEYMINT_NOT_CONFIGURED` disappearing from logcat.
 If `getprop` shows `13` from the shell but KeyMint still fails, the label is not
 the remaining problem — the shell's domain differs from the HAL's, so re-check
 with `dmesg | grep avc` for a denial naming `hal_keymint_default`.
+
+## Binary patch verified by cross-reference (2026-08-28)
+
+The original verification checked that the two strings existed at offsets
+34768/34793, that `cmp -l` changed only string bytes, and that the HAL service
+binary carries no version strings of its own. All necessary — but none of it
+proves the **code actually reads those particular string copies**. A patched
+string the code never references is inert, and here that would only be
+discovered *after* a flash that risks `/data`.
+
+Checked properly with `llvm-objdump`, resolving `adrp`/`add` pairs against
+`.rodata` (same method used on `/system/bin/init`):
+
+| string | occurrences in file | code references |
+|---|---|---|
+| `ro.build.version.release` | **1** | **2** — `0xc200`, `0xcbb0` |
+| `ro.build.version.security_patch` | **1** | **2** — `0xc248`, `0xcc3c` |
+
+One copy of each, so patching it redirects *every* reference. The patch is live,
+not inert.
+
+**Completeness.** Every property name referenced by code in `libkeymint.so` —
+the full set, not a sample:
+
+```
+ro.build.version.release           <- redirected
+ro.build.version.security_patch    <- redirected
+ro.vendor.build.security_patch     <- not redirected
+```
+
+The one left alone is a *vendor* property already holding the vendor's own
+correct value, and `security_patch` was separately shown not to need to match
+(a device boots with `ro.keymaster.xxx.security_patch=2019-06-06` against a
+system reporting `2025-09-05`). **There is no unpatched path that can supply the
+OS version**, which is the value that actually matters.
+
+## Scope: this fixes ONE of the two known blockers
+
+Written when the version mismatch looked like the whole problem. It is not.
+A second, independent blocker lives in **`/system/bin/init`** — see
+[INIT_SWAP_FIX.md](INIT_SWAP_FIX.md) — and that file is part of the **GSI**, not
+the vendor, so nothing done here can affect it.
+
+Consequence for the stated goal of "any unmodified GSI boots": images blocked by
+the init problem (Infinity-X 3.12, crDroid 10/11, Lunaris-AOSP) would **still
+fail** with this patch in place. Its real reach is *"any unmodified GSI that is
+not also blocked by init"* — which today means CiRCLE, AviumUI and LineageOS,
+all of which already boot with a one-file version patch.
+
+Worth weighing before flashing: when this was designed, per-image patching meant
+a Linux box, root, a loop mount and ~15 minutes. It is now a few taps in the
+on-device app, proven across four ROMs. The convenience this buys has shrunk
+considerably, while the risk — `fastboot flash vendor` with `--disable-verity`,
+and a real chance of losing `/data` — has not.
