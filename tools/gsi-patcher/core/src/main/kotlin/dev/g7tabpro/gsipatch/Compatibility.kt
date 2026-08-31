@@ -85,8 +85,17 @@ object Compatibility {
                 "different failure from the splash hang: the image is rejected at or before " +
                 "load, so init never runs and the donor-init fix cannot help (confirmed -- 2.8 " +
                 "still reverts WITH Project CiRCLE's init swapped in). Not a KeyMint problem. " +
-                "Diagnose it from the DSU side instead: gsid/logcat during install and first " +
-                "boot, not the version props or init."),
+                "Ruled out by measurement on the patched 2.8 image: the filesystem is clean " +
+                "(e2fsck -fn), the AVB footer and full sha256 hashtree verify, all three " +
+                "build.prop files read release=13, and it is the SMALLEST of the images tried " +
+                "here, so space is not it either. Also ruled out on hardware: rebuilding the " +
+                "vbmeta so the com.android.build.system.os_version property descriptor reads " +
+                "13 instead of its upstream 16 -- a single-variable change, root digest " +
+                "byte-identical -- still reverts instantly. Diagnose it from the DSU side " +
+                "instead: gsid/logcat during INSTALL (logcat does not survive the reboot, so " +
+                "a post-revert capture only ever shows the host booting), and pstore for the " +
+                "failed boot itself. The outstanding control is whether STOCK, unpatched Axion " +
+                "reverts too -- if it does, none of our patching is implicated."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 36, true,
             "Infinity-X 3.12 BOOTS once its /system/bin/init is replaced with one from a GSI " +
                 "that boots here (confirmed on hardware). The version patch alone is not enough: " +
