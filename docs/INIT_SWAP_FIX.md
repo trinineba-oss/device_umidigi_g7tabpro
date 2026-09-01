@@ -631,3 +631,164 @@ than checking, who consumed it.
 offsets **34768** and **34793**. Those are `0x87d0` and `0x87e9` -- exactly the
 string offsets found above. The vendor patch targets the right bytes, and the
 HAL reading only these three properties is precisely why that approach works.
+
+---
+
+# THE MECHANISM, FOUND FOR REAL (2026-09-01): `ro.crypto.state`
+
+The correction above reopened the question by killing the root-of-trust chain.
+This section answers it, and unlike every previous attempt **the consumer is
+identified on this device's own vendor image**, not assumed.
+
+## The missing piece: the vendor's own rc file
+
+`/vendor/etc/init/trustkernel.rc`, read straight out of `vendor_a.img` (build
+20241121, the one running on the device):
+
+```
+# For non-encrypted case
+on property:ro.crypto.state=unencrypted
+	setprop vendor.trustkernel.fs.mode 1
+	setprop vendor.trustkernel.fs.state prepare
+
+# For FDE/encrypted successfully
+on property:vold.decrypt=trigger_restart_framework
+	setprop vendor.trustkernel.fs.mode 2
+	setprop vendor.trustkernel.fs.state prepare
+
+# For FBE/encrypted successfully
+on property:ro.crypto.type=file && property:ro.crypto.state=encrypted
+	setprop vendor.trustkernel.fs.mode 3
+	setprop vendor.trustkernel.fs.state prepare
+
+on property:vendor.trustkernel.fs.state=prepare
+	...
+	mkdir /data/vendor/t6/app        # the TA path
+	setprop vendor.trustkernel.fs.state ready
+```
+
+**`ro.crypto.state` is the gate on the TrustKernel TEE's filesystem
+preparation** -- the TEE that KeyMint runs on. And `ro.` properties are
+**write-once**.
+
+The spoof table sets `ro.crypto.state = encrypted` during init's property load,
+long before vold determines the real value. vold's own write then silently
+fails, so the value never reflects reality and the matching trigger never fires.
+
+## The discriminator is a code path, not a string
+
+`ro.crypto.state` appears in **every** init examined, booting or not -- AOSP's
+init references it legitimately. String presence proves nothing, exactly as
+rule 1 says. Cross-referencing `adrp`/`add` pairs separates them cleanly:
+
+```
+inf_init (HANGS)                          circle_init (BOOTS)
+  ro.crypto.state  0x9f29c  fn 0x98034      ro.crypto.state  0x9f29c  fn 0x98034
+  ro.crypto.state  0x9f2f0  fn 0x98034      ro.crypto.state  0x9f2f0  fn 0x98034
+  ro.crypto.state  0xfce68  fn 0xfa4ec  <-- (absent)
+  encrypted        0x9f2b0  fn 0x98034      encrypted        0x9f2b0  fn 0x98034
+  encrypted        0xfced0  fn 0xfa4ec  <-- (absent)
+```
+
+The legitimate references are at **byte-identical addresses** in both binaries.
+The failing init has one **extra** reference, inside `0xfa4ec` -- the spoof
+table in the property-loading routine. A clean 1-vs-0 on a code path.
+
+## Why this fits every observation
+
+| observation | explained |
+|---|---|
+| **zero TEE kernel lines** on a bad boot vs 34 on a good one | the TEE filesystem is never prepared, so the TA never loads |
+| **perfectly deterministic** (2/2, 3/3) | a write-once collision is not a race |
+| the HAL "fails to register in time" | it is waiting on a TEE that will never be ready |
+| **swapping init fixes it** | no spoof entry, so vold's value stands and the trigger fires |
+| `libkeymint.so` reads no root-of-trust props | irrelevant -- the mechanism is `ro.crypto.state`, not RoT |
+| AviumUI boots | no spoof table at all |
+| the version patch alone is not enough | genuinely separate blocker |
+
+It also survives the test that killed the timing theory: repointing the vbmeta
+device path changed nothing here, because `ro.crypto.state` is a different table
+entry entirely.
+
+**Scope check:** of the ~35 properties the spoof table sets, `ro.crypto.state`
+is the **only one** that gates anything functional on this vendor. Grepping all
+92 `/vendor/etc/init/*.rc` files for `on property:` triggers on spoofed names
+returns the two TrustKernel rules above, plus VTS rules that only fire on
+`ro.build.type=eng|userdebug` (this is a `user` build, so they are inert).
+
+## The fix: one instruction, not a whole init
+
+`tools/patch-init-crypto-spoof.py` nudges the spoof entry's name pointer three
+bytes into its own string, so it writes to the inert name `crypto.state` and
+leaves every legitimate `ro.crypto.state` reference untouched:
+
+```
+add x14, x14, #2702   ->   add x14, x14, #2705
+0x10000 + 2702 = 0x10A8E "ro.crypto.state"
+0x10000 + 2705 = 0x10A91    "crypto.state"
+```
+
+**One byte changes.** Same size, same inode, same block allocation -- so the
+existing in-place patch path handles it with no relocation.
+
+The spoof reference is told from the legitimate ones **structurally**: it is the
+one whose enclosing function also materialises `locked` and `green`. The script
+refuses to run on an init without that fingerprint.
+
+Artefacts:
+
+```
+5f2d81e724a5d362cfba67a5c1b275e0f3e7ae8e401760b7268b7976c3eefa9c  inf_init_nocrypto      2724744
+99c9da14f94b8a5b9b9fe1e9098f0ebcbc7058b9f39213e6329b208d03cf8257  lunaris_init_nocrypto  2724864
+```
+
+### Why this is better than the init swap
+
+The swap works but replaces the ROM's whole init, discarding **all** its
+spoofing -- Play Integrity, `ro.build.tags`, `ro.debuggable` and the rest. This
+neutralises the single entry that breaks boot and **keeps everything else**,
+which resolves the untested side-effect flagged earlier.
+
+## A prediction that already checks out
+
+Running the script across every init produces this, with no tuning:
+
+```
+inf_init      spoof fn 0xfa4ec  -> patched (1 byte)
+lunaris_init  spoof fn 0xfa02c  -> patched (1 byte)
+axion_init    spoof fn 0xfa5e0  -> REFUSED: spoof table does not reference ro.crypto.state
+circle_init   -> REFUSED: no spoof table
+avium_init    -> REFUSED: no spoof table
+dozeoff_init  -> REFUSED: no spoof table
+```
+
+Three things fall out that were not designed for:
+
+1. The three inits known to **boot** are exactly the three with no spoof table.
+2. The two inits known to **splash-hang** both carry the crypto entry, at
+   different offsets in different functions -- so the pattern is structural, not
+   an artefact of one build.
+3. **Axion has a spoof table but no crypto entry** -- and Axion is the one ROM
+   whose failure is a *different shape* (instant revert, before init runs). The
+   model predicts Axion should not be in the splash-hang family, and its init
+   independently confirms it.
+
+## Status: [PC], awaiting one hardware test
+
+Proven offline: the vendor gates its TEE fs on `ro.crypto.state`; the failing
+inits contain an extra write to it that booting inits do not; the patch changes
+exactly one byte and only the spoof reference.
+
+**Not** proven: that vold's write actually loses the write-once race in
+practice, and that this is sufficient to fix the boot.
+
+**The test:** patch a non-booting Infinity-X image with the app, using
+`inf_init_nocrypto` as the donor init. Same workflow as always.
+
+- **Boots** -> mechanism confirmed, and the fix keeps the ROM's spoofing.
+- **Still hangs** -> `ro.crypto.state` is not sufficient; the next candidates
+  are the remaining table entries, and the `getprop` observation becomes the
+  priority again.
+
+Either way it is one DSU cycle and a single-variable change against an image
+whose unpatched behaviour is already known.
