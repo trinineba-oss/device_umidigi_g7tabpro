@@ -792,3 +792,121 @@ practice, and that this is sufficient to fix the boot.
 
 Either way it is one DSU cycle and a single-variable change against an image
 whose unpatched behaviour is already known.
+
+---
+
+# `ro.crypto.state` FAILED ON HARDWARE — and the real consumer was in a file I had not opened
+
+## The failed test [HW]
+
+`inf_init_nocrypto` (one byte, the `ro.crypto.state` spoof entry redirected)
+was patched into a non-booting Infinity-X image via the app. **Result: GSI
+splash hang, unchanged.**
+
+Before blaming the hypothesis, the patch was audited against rule 1 — the
+failure mode that has cost this project three cycles now. It holds up:
+
+- The table loop was decoded: `add x25, x25, #16` / `cmp x25, #592` over a base
+  of `sp+608` = **37 entries of 16 bytes**, name at `+0`, value at `+8`. That
+  matches the reconstructed table exactly.
+- The per-entry call is `bl 0xfa43c`, whose failure path logs *"Unable to set
+  property '...' to send property message"* — so it really is a property
+  **set** table, not a read-time override.
+- Post-patch cross-reference confirmed the spoof entry pointed at the inert
+  `crypto.state` while both legitimate references were untouched.
+
+So the patch did what it claimed. **`ro.crypto.state` is simply not the
+blocker.**
+
+## Where the analysis went wrong
+
+The earlier correction concluded "the vendor KeyMint HAL does not read the
+root-of-trust properties" from `libkeymint.so`. **That checked the wrong file.**
+`libkeymint.so` is the library; the HAL is a *service binary*:
+
+```
+/vendor/bin/hw/android.hardware.security.keymint-service.trustkernel
+```
+
+Extracted from `vendor_a.img` and dumped, the properties it references are:
+
+```
+ro.boot.vbmeta.device_state
+ro.boot.vbmeta.digest
+ro.boot.verifiedbootstate
+ro.product.board / brand / device / manufacturer / model / name
+```
+
+The first three are **exactly** what the spoof table fabricates. So the
+root-of-trust hypothesis was right all along; the disproof was an artefact of
+opening the library instead of the binary that loads it.
+
+For completeness, `/vendor/bin/teed` (the TrustKernel daemon) references only
+`ro.board.platform`, `ro.product.brand`, `ro.product.model` — nothing spoofed.
+
+## The discriminator, again on code paths
+
+```
+inf_init (HANGS)                                     circle_init (BOOTS)
+  ro.boot.vbmeta.device_state  0xfcc98  fn 0xfa4ec     (string absent entirely)
+  ro.boot.vbmeta.digest        0xfd60c  fn 0xfa4ec     (string absent entirely)
+  ro.boot.verifiedbootstate    0xdbdec  fn 0xd9fa8     0xdb8cc  fn 0xd9fa8
+  ro.boot.verifiedbootstate    0xfce50  fn 0xfa4ec  <-- extra
+```
+
+Circle does not even contain the `device_state` or `digest` strings. For
+`verifiedbootstate` both binaries share a legitimate reference in `0xd9fa8`;
+only the failing one has a second reference inside the spoof table.
+
+## The fix
+
+`tools/patch-init-spoof.py` redirects those three name pointers past their
+`ro.` prefix, so each entry writes an inert unread name:
+
+```
+ro.boot.vbmeta.device_state  0xfcc98  #229  -> #232   'boot.vbmeta.device_state'
+ro.boot.vbmeta.digest        0xfd60c  #1554 -> #1557  'boot.vbmeta.digest'
+ro.boot.verifiedbootstate    0xfce50  #3568 -> #3571  'boot.verifiedbootstate'
+```
+
+**Three bytes.** Size unchanged; the in-place image path still applies. The
+legitimate reference at `0xdbdec` is verified untouched after patching.
+
+The point is not to write *better* values — it is to leave the properties
+**absent**, which is precisely the state Project CiRCLE's init produces, and
+Circle boots here.
+
+```
+ff99b5e8b078638f1e6e2cd07d120af10264065ecd4a4dd7f031479091caf60d  inf_init_norot3      2724744
+f3efaf7e4aa5299f8bff18c9aa1f8bf46585d9637aa41cb8fddabf60a734dd9f  lunaris_init_norot3  2724864
+```
+
+This also supersedes `inf_init_norot2`, which redirected the same properties but
+was built before the table structure was understood and was never validated by
+post-patch cross-reference.
+
+## Status [PC] — one DSU cycle to settle
+
+Unlike every previous version of this hypothesis, the consumer is now
+**identified in a binary on this device**, not assumed. What remains untested is
+whether leaving the properties absent is sufficient.
+
+Use `inf_init_norot3` as the donor init on a non-booting Infinity-X image.
+
+- **Boots** — root-of-trust confirmed, and the ROM keeps all its other spoofing
+  (Play Integrity, `ro.build.tags`, `ro.debuggable`).
+- **Still hangs** — the root-of-trust content is not the mechanism either. At
+  that point stop patching and run the `getprop` capture: with three failed
+  binary patches, the observation has earned priority over further surgery.
+
+## Method note, third time
+
+Each of the three failed patches failed for the same reason in a different
+disguise: **the thing being reasoned about was not the thing being read.**
+Test 1 patched a path but not the property write. Test 2 patched a prefix the
+code never used. This time the analysis was correct but pointed at the wrong
+consumer, because `libkeymint.so` was opened instead of the service binary that
+loads it.
+
+The rule generalises beyond strings: **confirm you are reading the artefact
+that actually runs.**
