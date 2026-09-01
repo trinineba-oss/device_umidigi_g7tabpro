@@ -315,13 +315,18 @@ non-existent node — 6 bytes changed, everything else byte-identical — so
 The theory also never explained determinism: failures are **2/2 and 3/3 on
 repeat attempts**. A race should be flaky.
 
-**Root-of-trust theory: [INF], untested.** The failing inits *synthesise*
-`ro.boot.vbmeta.*` when the bootloader does not supply them — and this device's
-bootloader does not. The vendor KeyMint HAL reads exactly
-`ro.boot.vbmeta.device_state`, `ro.boot.vbmeta.digest` and
-`ro.boot.verifiedbootstate` to compute its root of trust. An init that
-fabricates them hands the TA a root of trust the device never had. A wrong
-constant *would* be deterministic.
+**Root-of-trust theory: [DEAD] as stated.** The failing inits do synthesise
+`ro.boot.vbmeta.*` — disassembly later found the full hardcoded spoof table
+(see INIT_SWAP_FIX.md). But the premise that the vendor KeyMint HAL reads those
+properties was **checked on 2026-09-01 and is false**: `libkeymint.so` contains
+exactly three property names, all version-related, and zero root-of-trust
+symbols. It cannot be consuming the spoofed values.
+
+The spoof table is real and remains the cleanest structural difference between
+inits that boot here and inits that do not. Why it breaks the boot is open.
+The precise question is **"why does the vendor KeyMint HAL fail to register
+with servicemanager when this init is used"** — because in this failure mode
+the `-64` comes from keystore2's emulated fallback, not from the TA at all.
 
 **Both attempts to test it failed because the patch did not do what I claimed:**
 

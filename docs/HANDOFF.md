@@ -58,14 +58,18 @@ Three distinct boot blockers have been identified on this device. They are
 | 2 | `/system/bin/init` verified-boot spoofing | GSI splash hang, same error | **Solved as a fix [HW]**; mechanism now strongly evidenced [PC] |
 | 3 | Axion instant DSU revert | reverts before init runs | **Unsolved**, 6 hypotheses eliminated |
 
-**The headline result of this session (2026-09-01):** blocker 2's mechanism is
-no longer a guess. Disassembly of the failing `init` reveals a **hardcoded
-property table that spoofs verified-boot state to `locked` / `green` /
-`enforcing` / `release-keys`**, executing inside init's property-loading
-routine on every boot. On a device whose bootloader is unlocked and whose
-KeyMint HAL computes its root of trust from exactly those properties, this
-hands the TEE a root of trust the device never had. See **§5.7** — it is the
-most important section in this document.
+**The headline result of this session (2026-09-01):** disassembly of the failing
+`init` reveals a **hardcoded property table that spoofs verified-boot state to
+`locked` / `green` / `enforcing` / `release-keys`**, executing inside init's
+property-loading routine on every boot (**§5.7**). That table is real and
+verified.
+
+**And then, the same day, the obvious explanation for it was falsified
+(§5.8a).** The vendor KeyMint HAL was checked directly: it reads **three**
+properties, all version-related, and has **zero** root-of-trust plumbing. So it
+cannot be consuming the spoofed values. The fix still works; *why* it works is
+open again. Read §5.7 and §5.8a together — the second undoes the first's
+conclusion while leaving its evidence standing.
 
 ---
 
@@ -511,6 +515,11 @@ failing init's property-load routine sets, unconditionally:
   -> /data never mounts -> splash hang
 ```
 
+> **SUPERSEDED — see §5.8a immediately below. The first line of this chain was
+> checked against the vendor HAL and is false.** The chain is left here
+> unaltered because §5.8a is a correction of it, and deleting the claim would
+> hide what was believed and why.
+
 Three things this explains that the timing theory never could:
 
 1. **Determinism.** Failures are 2/2 and 3/3 on repeat attempts. A race should
@@ -520,6 +529,66 @@ Three things this explains that the timing theory never could:
    vs wrong root of trust).
 3. **Why AviumUI boots** despite carrying the vbmeta property *names*: it never
    sets them to fabricated values.
+
+### 5.8a CORRECTION — the vendor HAL does not read these properties [PC]
+
+Checked directly against `~/gsi-test/libkeymint.so` (122,672 bytes, `ELF
+aarch64, for Android 31`). It contains **three** property names in total:
+
+```
+   87d0 ro.build.version.release
+   87e9 ro.build.version.security_patch
+   8f1d ro.vendor.build.security_patch
+```
+
+`strings -a libkeymint.so | grep -cE '^ro\.[a-z_.]+$'` returns **3**. No
+`ro.boot.vbmeta.*`, no `verifiedbootstate`, no `secureboot`, no `veritymode`.
+A case-insensitive symbol search for `rootoftrust|setbootparam|verifiedboot|
+vbmeta` returns **zero**. What it exports is version machinery:
+
+```
+_ZN9keymaster12GetOsVersionEPKc          keymaster::GetOsVersion(char const*)
+_ZN9keymaster12GetOsVersionEv            keymaster::GetOsVersion()
+_ZN9keymaster16AndroidKeymaster14EarlyBootEndedEv
+```
+
+**The vendor KeyMint HAL cannot be reading what the init spoof sets.** The root
+of trust reaches the TEE another way — almost certainly bootloader-to-TEE
+directly, which is normal on MediaTek/TrustKernel.
+
+**Dead:** the chain in §5.8.
+**Untouched:** the fix itself, hardware-verified on four ROMs / three lineages.
+**Untouched:** the spoof table's existence and its position in init.
+**Reopened:** why it breaks the boot.
+
+And note what the original analysis already said: in the init-blocker case the
+`-64` does **not** come from the TrustKernel TA — the TA is never loaded (zero
+TEE kernel lines). It comes from the **emulated fallback** keystore2 installs
+after the vendor HAL fails to register with servicemanager. So the real
+question was never "what does the TA reject". It is **"why does the vendor
+KeyMint HAL fail to register when this init is used"** — and the spoof table is
+still the best-evidenced difference, just not via the route assumed.
+
+Unexamined candidates from the table that could affect early service startup:
+
+- `ro.crypto.state=encrypted` — `ro.` props are **write-once**, so pre-setting
+  it could make vold's own set fail and change the FBE path
+- `ro.build.type=user`, `ro.build.tags=release-keys`, `ro.debuggable`,
+  `ro.secure`, `ro.adb.secure` — these gate which services start and how
+  SELinux is applied; a domain transition that does not happen would stop the
+  HAL registering
+- `ro.boot.veritymode=enforcing` — affects fs_mgr / dm-verity setup
+
+**Method note:** this correction cost one `strings` call and one symbol dump on
+a file that had been sitting extracted in `~/gsi-test/` the whole time — and it
+overturned a conclusion already written into three documents and a commit
+message. The disassembly was sound; the error was assuming, rather than
+checking, who consumed the table.
+
+**Bonus:** it independently confirms the vendor patch. `VENDOR_SELINUX_PROP_FIX.md`
+patches `libkeymint.so` at decimal offsets **34768** and **34793** — exactly
+`0x87d0` and `0x87e9` above. Right bytes, and the HAL reading only these three
+properties is precisely why that approach works.
 
 ### 5.9 Status of this hypothesis — read carefully
 
@@ -886,14 +955,16 @@ Probably not, and this matters for prioritisation. The vendor patch addresses
 the **OS version** the HAL reports (blocker 1). The init spoof concerns the
 **root of trust** (blocker 2). They are different inputs to the same TA.
 
-> **Open question for a fresh reader:** could the same `libkeymint.so`
-> redirection technique be applied to the *root-of-trust* property reads —
-> pointing them at vendor-owned properties too? If so, a single vendor patch
-> might neutralise **both** blockers, making even spoof-carrying GSIs boot
-> unmodified. Nobody has looked at whether `libkeymint.so` reads
-> `ro.boot.vbmeta.device_state` / `ro.boot.verifiedbootstate` directly, or
-> whether it gets them from the bootloader via another path. **This is probably
-> the highest-value unexplored idea in the project.**
+> **ANSWERED 2026-09-01 — and the answer is no.** `libkeymint.so` reads only
+> three properties, all version-related, and has no root-of-trust plumbing at
+> all (§5.8a). There is nothing to redirect: the RoT reaches the TEE by another
+> path, almost certainly bootloader-to-TEE directly. A vendor patch cannot
+> neutralise blocker 2 this way.
+>
+> The upside: this **confirms the vendor patch is correctly targeted**. Its
+> documented offsets 34768 / 34793 are exactly the `0x87d0` / `0x87e9` string
+> locations, and the HAL reading only these three properties is why redirecting
+> them works at all.
 
 ---
 
@@ -1404,10 +1475,12 @@ is something nobody has checked.
 
 ### 16.1 About the init spoof table (§5.7)
 
-1. **Does `libkeymint.so` actually read those properties on this device?** The
-   causal chain is [INF]. `~/gsi-test/libkeymint.so` is extracted and available
-   — a `strings` and cross-reference pass would answer it directly, offline,
-   today. **This is the cheapest high-value check in the document.**
+1. ~~**Does `libkeymint.so` actually read those properties?**~~ **ANSWERED
+   2026-09-01: NO.** Three properties total, all version-related, zero
+   root-of-trust symbols. See §5.8a. This killed the §5.8 chain. The follow-on
+   question is now: **what does read them on this device, if anything?**
+   `keystore2` is the obvious candidate and has never been extracted or
+   examined.
 2. **Which specific property matters?** The table sets ~35. The suspicion falls
    on `ro.boot.vbmeta.device_state` and `ro.boot.verifiedbootstate`, but
    `ro.boot.veritymode=enforcing` and `ro.crypto.state=encrypted` are also

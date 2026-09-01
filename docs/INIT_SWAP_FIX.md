@@ -548,3 +548,86 @@ apps and Wallet may behave differently on an init-swapped ROM. Untested.
 
 Also: any earlier reasoning that used `ro.build.tags` as evidence about a ROM's
 provenance should be re-examined — on these images it is spoofed.
+
+### CORRECTION (2026-09-01, same day): the causal chain above is WRONG
+
+The claim "the vendor KeyMint HAL computes its root of trust from exactly these
+properties" was inference, and it has now been checked directly against the
+vendor HAL. **It is false on this device.**
+
+`/vendor/lib64/libkeymint.so` (extracted, 122,672 bytes, `ELF aarch64, for
+Android 31`) contains exactly **three** property names, all version-related:
+
+```
+   87d0 ro.build.version.release
+   87e9 ro.build.version.security_patch
+   8f1d ro.vendor.build.security_patch
+```
+
+That is the complete list -- `strings -a libkeymint.so | grep -cE '^ro\.[a-z_.]+$'`
+returns **3**. There is no `ro.boot.vbmeta.*`, no `verifiedbootstate`, no
+`secureboot`, no `device_state`, no `veritymode`.
+
+Nor is there any root-of-trust plumbing in its symbols: a case-insensitive
+search of the dynamic symbol table for `rootoftrust|setbootparam|verifiedboot|
+vbmeta` returns **zero** matches. What it does export is:
+
+```
+_ZN9keymaster12GetOsVersionEPKc          keymaster::GetOsVersion(char const*)
+_ZN9keymaster12GetOsVersionEv            keymaster::GetOsVersion()
+_ZN9keymaster16AndroidKeymaster14EarlyBootEndedEv
+```
+
+**So the vendor KeyMint HAL cannot be reading the properties the init spoof
+sets.** The root of trust reaches the TEE by another route entirely -- almost
+certainly bootloader-to-TEE directly, which is normal on MediaTek/TrustKernel.
+
+#### What survives, and what does not
+
+**Dead:** the specific causal chain "failing init fabricates root-of-trust
+properties -> vendor HAL reads them -> TA rejects". The HAL does not read them.
+
+**Untouched:** the *fix* is still correct and still hardware-verified on four
+ROMs across three lineages. Swapping init works. That was never in question.
+
+**Untouched:** the spoof table itself is real (verified by disassembly), it runs
+in init's property-loading routine on every boot, and it remains the cleanest
+structural difference between inits that boot here and inits that do not.
+
+**Reopened:** *why* it breaks the boot. Recall from the top of this document
+that in the init-blocker case the `-64` does **not** come from the TrustKernel
+TA at all -- the TA is never loaded (zero TEE kernel lines). It comes from the
+**emulated fallback** keystore2 installs after the vendor HAL fails to register
+with servicemanager in time. So the question was never "what does the TA
+reject"; it is **"why does the vendor KeyMint HAL fail to register when this
+init is used"**.
+
+Candidates from the table that could plausibly affect early-boot service
+startup, none yet examined:
+
+- `ro.crypto.state=encrypted` -- `ro.` props are **write-once**, so pre-setting
+  this could make vold's own set fail and change the FBE path
+- `ro.build.type=user` / `ro.build.tags=release-keys` / `ro.debuggable=0` /
+  `ro.secure` / `ro.adb.secure` -- these gate which services start and how
+  SELinux is applied; a domain transition that does not happen would prevent
+  the HAL from registering
+- `ro.boot.veritymode=enforcing` -- affects fs_mgr / dm-verity setup
+
+#### Method note
+
+This correction cost one `strings` invocation and one symbol-table dump, on a
+file that had been sitting extracted in `~/gsi-test/` the entire time. It
+overturned a conclusion that had already been written into three documents and
+a commit message.
+
+**That is the rule of this project restating itself: run the cheap direct check
+before building a story on top of an inference.** The disassembly work in the
+section above was sound -- the table is real. The error was in assuming, rather
+than checking, who consumed it.
+
+#### Bonus: the vendor patch is independently confirmed correct
+
+`VENDOR_SELINUX_PROP_FIX.md` documents patching `libkeymint.so` at decimal
+offsets **34768** and **34793**. Those are `0x87d0` and `0x87e9` -- exactly the
+string offsets found above. The vendor patch targets the right bytes, and the
+HAL reading only these three properties is precisely why that approach works.
