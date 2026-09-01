@@ -756,3 +756,102 @@ python3 external/avb/avbtool.py verify_image --image system.img   # MUST be name
   fighting permissions.
 - **No UART.** Every boot test is blind; design them single-variable.
 
+
+---
+
+## 14. External review (2026-09-01) — responses
+
+An independent audit raised one structural critique and two new Axion
+hypotheses. Both hypotheses are now **closed by measurement**, and the critique
+was correct but had already been superseded the same day by a harder result.
+
+### 14.1 "The root-of-trust hypothesis has a logical hole" — CORRECT
+
+The reviewer's argument: the TA was provisioned on a locked/green device, so
+spoofing `locked`/`green` is arguably *closer* to its provisioned root of trust
+than the honest unlocked values — the opposite direction from the hypothesis.
+And if the TA rejected the honest absent/unlocked state, Circle's init (which
+publishes nothing) should hang too. It does not.
+
+That reasoning is sound. It reaches the same verdict that direct measurement
+reached independently on the same day: `libkeymint.so` reads **three**
+properties, all version-related, and has **zero** root-of-trust plumbing
+(INIT_SWAP_FIX.md, correction section). The hypothesis is dead either way —
+by logic and by measurement.
+
+The reviewer's surviving contribution is the reframe in their §2.1:
+**ordering rather than content**. That generalises past the dead RoT chain and
+onto the question that is actually open — *why does the vendor KeyMint HAL fail
+to register with servicemanager when this init is used* — and their §2.2
+advice stands: capture pstore **with timestamps** and establish what happens
+before what, rather than patching `inf_init_norot2` first. That is this
+project's own rule 6.
+
+### 14.2 Axion hypothesis A — different AVB signing key — DEAD [PC]
+
+Proposed: Axion may be signed with a different AOSP test key than the images
+that boot, which would be a deterministic pre-init rejection.
+
+Measured across all three:
+
+```
+circle.img.xz            Public key (sha1): cdbb77177f731920bbe0a0f94f84d9038ae0617d
+inf312-initswap...gz     Public key (sha1): cdbb77177f731920bbe0a0f94f84d9038ae0617d
+axion28-osver13.img.gz   Public key (sha1): cdbb77177f731920bbe0a0f94f84d9038ae0617d
+```
+
+Identical. The sha1 is computed over the encoded key blob itself, so matching
+sha1 means matching blob — the "compare blobs not just algorithm" refinement is
+satisfied. **Closed.**
+
+### 14.3 Axion hypothesis B — avbtool 1.3.0 header encoding — DEAD [HW] + [PC]
+
+Proposed: Axion is the only avbtool **1.3.0** image while every booting image is
+1.2.0, so a newer header flag or descriptor encoding might be rejected by this
+device's API-31-vintage `libavb`.
+
+**The premise is false.** Pristine Project CiRCLE — which boots — is *also*
+`Release String: 'avbtool 1.3.0'`. The 1.2.0 images were 1.2.0 only because the
+**shell script re-signed them** with the local avbtool; that is provenance, not
+a property of the ROM.
+
+And the hypothesis was already tested on hardware without anyone realising:
+`axion28-avb13.img.gz` (§5.3) was rebuilt end-to-end with the local avbtool
+**1.2.0** — regenerating header, flags, rollback index location and descriptor
+encoding — and **still instant-reverted [HW]**. **Closed twice over.**
+
+### 14.4 Bonus finding from the full vbmeta diff
+
+Field-by-field `info_image` diff, Circle (boots) vs Axion (reverts), shows
+these are **identical**: public key, algorithm, Flags (0), Rollback Index
+Location (0), Minimum libavb version, header/authentication/auxiliary block
+sizes, footer version, dm-verity version, block sizes, hash algorithm,
+partition name.
+
+The only differences are sizes, salt, root digest, rollback index (Circle's is
+*higher*, 1785542400 vs 1782864000), and FEC — **and Circle carries**:
+
+```
+Prop: com.android.build.system.os_version -> '16'
+```
+
+**Circle boots while carrying `os_version=16`.** That independently corroborates
+the §5.3 hardware result from a *booting* image rather than a failed test: the
+property is irrelevant. Two independent lines of evidence now agree.
+
+FEC is not a discriminator either — Circle has `FEC num roots: 2`, while
+Infinity-X (which boots) and Axion both have 0.
+
+So after this review, **no vbmeta-level difference between Axion and a booting
+image remains unexamined.** The §5.5 control — does *stock, unpatched* Axion
+also revert — is now clearly the next step, and the case for "Axion is simply
+DSU-incompatible on this device" is stronger than before.
+
+### 14.5 Note on the review's §4
+
+It recommends the `libkeymint.so` property check as outranking the current #1
+action. Agreed, and **it has since been run** — result negative, documented in
+INIT_SWAP_FIX.md. The review was written against documents predating that
+correction.
+
+Its §5 was not received; the uploaded file is truncated at line 124, mid-command.
