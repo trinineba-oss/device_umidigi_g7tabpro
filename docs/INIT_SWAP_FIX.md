@@ -456,3 +456,95 @@ signing bug does not explain crDroid.
 
 **Three ROMs, three separate lineages, same result** — so this is not specific
 to one maintainer's build pipeline.
+
+---
+
+## THE MECHANISM, FOUND — a hardcoded verified-boot spoof table (2026-09-01)
+
+Everything above this line is correlation. This section is the code.
+
+Cross-referencing `adrp`/`add` pairs in Infinity's init resolves every suspect
+string to exactly one live code site, clustered in ~2.4 KB:
+
+```
+locked                        0xfce08      ro.boot.vbmeta.device_state   0xfcc98
+green                         0xfce74      ro.boot.vbmeta.digest         0xfd60c
+/dev/block/by-name/vbmeta     0xfd324      ro.boot.vbmeta.size           0xfd474
+ro.is_ever_orange             0xfcedc      ro.secureboot.lockstate       0xfcee8
+ro.secureboot.devicelock      0xfce14      oplusboot.verifiedbootstate   0xfce2c
+```
+
+Reconstructing the stack table those instructions build — pairing each resolved
+string with the `str [sp, #N]` slot it is written to — gives an explicit
+name -> value map:
+
+```
+ro.boot.vbmeta.device_state      = locked
+ro.boot.verifiedbootstate        = green
+ro.boot.veritymode               = enforcing
+ro.secureboot.lockstate          = locked
+vendor.boot.vbmeta.device_state  = locked
+vendor.boot.verifiedbootstate    = green
+oplusboot.verifiedbootstate      = green
+ro.crypto.state                  = encrypted
+ro.build.tags / ro.build.keys    = release-keys
+ro.system.build.tags             = release-keys
+ro.build.type and ro.{bootimage,product,system,system_ext,odm,vendor,
+                      vendor_dlkm,system_dlkm}.build.type = user
+ro.boot.vbmeta.hash_alg          = sha256
+plus ro.boot.flash.locked, ro.is_ever_orange, ro.secureboot.devicelock,
+     ro.debuggable, ro.force.debuggable, ro.adb.secure, ro.secure,
+     ro.warranty_bit, ro.vendor.warranty_bit, sys.oem_unlock_allowed,
+     ro.oem_unlock_supported
+```
+
+**This is a Play Integrity / SafetyNet property spoof** — the block a maintainer
+adds so an unlocked device reports as locked, verified, `user`-built and
+`release-keys`-signed.
+
+`orange` and `yellow` appear in **no** init examined. The code has no path for
+the honest values.
+
+All four probed sites resolve to the same enclosing function entry `0xfa4ec` —
+independently identified as init's **property-loading** routine, reached via a
+5-deep call chain from startup. It runs early in second stage, on every boot,
+before services start.
+
+### Why this explains the failure
+
+This device's bootloader is **unlocked** and publishes none of these properties.
+The vendor KeyMint HAL computes its root of trust from exactly them, so the TA
+is handed a root of trust the device never had, rejects it, and returns
+`KEYMINT_NOT_CONFIGURED` — from which the chain is identical to the version
+blocker: vold cannot create the FBE key, `/data` never mounts, splash hang.
+
+It explains what the timing theory could not: **determinism** (2/2, 3/3 — a
+wrong constant, not a race), the **shared error code**, and **why AviumUI
+boots** despite carrying the vbmeta property *names* — it never sets them to
+fabricated values.
+
+### Status: [PC] strongly evidenced, NOT yet [HW]
+
+Proven: the table exists, its values are `locked`/`green`/`enforcing`/
+`release-keys`, it is referenced by live instructions, in a function that runs
+every boot.
+
+**Not** proven: that these properties are the cause. The step from "init sets
+them" to "the TA rejects" is still inference. Three specific gaps:
+
+1. Nobody has checked whether `libkeymint.so` reads these properties on this
+   device — and `~/gsi-test/libkeymint.so` is extracted and available.
+2. `ro.` properties are **write-once**. If something set them earlier, init's
+   write is *rejected* and the hypothesis collapses. Unverified.
+3. The branch conditions around the table were not examined; it may be guarded.
+
+**The `getprop` observation in the previous section settles it for one boot and
+no binary surgery. Do that first.**
+
+### Side effect nobody has measured
+
+Swapping in Circle's init **removes this spoofing**. Play Integrity, banking
+apps and Wallet may behave differently on an init-swapped ROM. Untested.
+
+Also: any earlier reasoning that used `ro.build.tags` as evidence about a ROM's
+provenance should be re-examined — on these images it is spoofed.
