@@ -224,17 +224,53 @@ BOARD_MKBOOTIMG_ARGS += --board ""
 #      refuse to unwrap them — which matches the observed symptom exactly
 #      ("hung trying to decrypt /data, stuck on the splash, no crash").
 #
-#      Worth trying: make the recovery report 13. PLATFORM_VERSION is
-#      .KATI_READONLY (see below), so it needs RELEASE_PLATFORM_VERSION := 13
-#      via a release config, or a prop override shipped in the recovery
-#      ramdisk. That also explains the TW_FORCE_KEYMASTER_VER dead end noted
-#      below: the flag produced an empty version because the underlying prop
-#      was unset — we now know which value it wants.
+#      Worth trying: make the recovery report 13.
 #
-#      If that works, TW_INCLUDE_CRYPTO / TW_INCLUDE_FBE /
-#      TW_INCLUDE_FBE_METADATA_DECRYPT (disabled further down) could be
-#      re-enabled, and "/data decryption in recovery" stops being a permanent
-#      trade-off.
+#      CORRECTION (2026-09-02): the note above about RELEASE_PLATFORM_VERSION
+#      was wrong — that flag doesn't exist in this AOSP generation at all
+#      (there's no build/release/ directory in this tree; it's a trunk-stable
+#      mechanism this branch predates). Traced the real one instead, from
+#      build/make/core/envsetup.mk's include order:
+#
+#        line  68: include $(BUILD_SYSTEM)/version_defaults.mk
+#        line 323: include $(BUILD_SYSTEM)/board_config.mk   (-> this file)
+#
+#      version_defaults.mk runs BEFORE BoardConfig.mk, so a value set HERE is
+#      too late — the file's own `ifndef PLATFORM_VERSION_LAST_STABLE` guard
+#      has already fired by the time this file is read. And it's
+#      build/make/tools/buildinfo.sh, not PLATFORM_VERSION itself, that turns
+#      the make variable into the prop the TEE actually sees:
+#
+#        ro.build.version.release=$PLATFORM_VERSION_LAST_STABLE
+#        ro.build.version.release_or_codename=$PLATFORM_VERSION
+#
+#      Neither PLATFORM_VERSION_LAST_STABLE nor PLATFORM_VERSION is
+#      .KATI_READONLY here (only PLATFORM_SDK_VERSION, TARGET_PLATFORM_VERSION,
+#      PLATFORM_VERSION_CODENAME and DEFAULT_PLATFORM_VERSION are) — both are
+#      guarded by plain `ifndef`, which is exactly the hook `vendorsetup.sh`
+#      is for: it's sourced by `envsetup.sh` before `lunch`/`mka` ever run, so
+#      an exported env var from it is already "defined" by the time
+#      version_defaults.mk's ifndef checks fire.
+#
+#      Verified locally against this exact tree (twrp-12.1, SP2A/12 base) —
+#      not just reasoned about:
+#
+#        $ export PLATFORM_VERSION_LAST_STABLE=13 && lunch twrp_g7tabpro-eng
+#        PLATFORM_VERSION=13          # was 12 without the export
+#        $ mka out/target/product/g7tabpro/system/build.prop
+#        ro.build.version.release=13
+#        ro.build.version.release_or_codename=13
+#        ro.build.version.sdk=32      # unchanged, as intended
+#
+#      So the actual fix lives in vendorsetup.sh, not here. See there. That
+#      also explains the TW_FORCE_KEYMASTER_VER dead end noted below: the flag
+#      produced an empty version because the underlying prop was unset — we
+#      now know which value it wants and how to set it.
+#
+#      TW_INCLUDE_CRYPTO / TW_INCLUDE_FBE / TW_INCLUDE_FBE_METADATA_DECRYPT
+#      are re-enabled below on the strength of this reasoning. Not yet
+#      confirmed on hardware that decryption actually succeeds — only that the
+#      recovery can be made to report 13, and that this build compiles.
 # ---------------------------------------------------------------------------
 # Anti-rollback hack: pins security patch/version to absurdly future
 # values so TEE/RPMB-level downgrade rejection doesn't kick in — this
@@ -384,9 +420,9 @@ TW_THEME := portrait_hdpi
 #
 # Consequence: /data shows as encrypted/unmountable. That's acceptable for
 # the goal here — flashing ROMs writes to system/super, not /data.
-# TW_INCLUDE_CRYPTO := true
-# TW_INCLUDE_FBE := true
-# TW_INCLUDE_FBE_METADATA_DECRYPT := true
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_FBE := true
+TW_INCLUDE_FBE_METADATA_DECRYPT := true
 TW_EXCLUDE_APEX := true
 TW_EXCLUDE_MTP := true
 BOARD_HAS_NO_REAL_SDCARD := false
