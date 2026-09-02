@@ -998,3 +998,85 @@ tools/patch-init-spoof.py <init-in> <init-out>
 It locates the spoof table structurally (the function materialising both
 `locked` and `green`), refuses on inits that have none, and leaves every
 legitimate reference alone.
+
+---
+
+# Shipped in the app: v5.2 does this on-device, no donor needed
+
+`InitSpoof.kt` reimplements the three-byte fix in Kotlin so the app can apply it
+to the image's **own** init. No donor file, no PC.
+
+## Doing it without a disassembler
+
+`llvm-objdump` does not exist on Android, but a full disassembly was never
+needed -- only three instruction forms, decoded directly:
+
+```
+ADRP Rd, page     0x9F000000 & w == 0x90000000
+ADD  Rd, Rn, #i   0xFFC00000 & w == 0x91000000   (64-bit, no shift)
+BL   target       0xFC000000 & w == 0x94000000
+```
+
+The scan walks the executable PT_LOAD segment once, tracking the most recent
+`ADRP` per register and resolving every `ADD` that consumes one -- the same
+cross-reference the PC tool gets from objdump. `BL` targets give function
+entries, which is what makes the structural spoof-table test possible.
+
+Register tracking is deliberately naive, with no control-flow analysis. That is
+safe here: a stale register can only ever resolve to an address that is not one
+of the wanted strings, and is then ignored.
+
+## Verified against the PC tool
+
+The Kotlin implementation produces **byte-identical output** to
+`tools/patch-init-spoof.py` on every init available, including the exact binary
+that booted on hardware:
+
+```
+inf_init      -> ff99b5e8...  == inf_init_norot3 (the [HW]-confirmed artefact)
+lunaris_init  -> f3efaf7e...  == lunaris_init_norot3
+```
+
+Full behaviour across the set:
+
+```
+inf_init       3 entries patched, 1 legitimate ref left alone (0xdbdec)
+lunaris_init   3 entries patched, 2 legitimate refs left alone (0xc89a8, 0xdb8cc)
+axion_init     2 entries patched (its table has no ro.boot.vbmeta.digest)
+circle_init    NotApplicable -- no spoof table
+avium_init     NotApplicable -- no spoof table
+dozeoff_init   NotApplicable -- no spoof table
+```
+
+The three inits known to boot are exactly the three refused, with no tuning.
+
+## End-to-end
+
+Pristine `inf312.img.xz` through the CLI with `--fix-init`: version properties
+patched in all three prop files, and the init extracted back out of the finished
+image is byte-identical to `inf_init_norot3`.
+
+## Using it
+
+**App (v5.2):** "Fix init verified-boot spoofing" is a checkbox, **on by
+default**. It is a no-op on images without a spoof table -- reported in the log,
+not an error. Picking a donor turns it off automatically, since a donor replaces
+the whole init and would overwrite the patch.
+
+**CLI:** `--fix-init`, mutually exclusive with `--donor-init`/`--donor-image`.
+
+```sh
+cli image.img.xz --out patched.img --fix-init --key testkey.pkcs8.der
+```
+
+## Why this is now the default path
+
+| | donor swap | `--fix-init` |
+|---|---|---|
+| needs a donor file | yes | **no** |
+| keeps the ROM's Play Integrity spoofing | no | **yes** |
+| bytes changed in init | 2.7 MB | **3** |
+| donor/ROM version mismatch risk | real | none |
+| works on an image whose ROM has no donor available | no | **yes** |
+
+The donor path stays for images this does not apply to.

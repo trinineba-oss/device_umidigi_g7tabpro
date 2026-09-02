@@ -24,7 +24,19 @@ object GsiPatcher {
          * boot blocker from the version properties. See [InitSwap] and
          * docs/INIT_SWAP_FIX.md. Null leaves init alone.
          */
-        val donorInit: ByteArray? = null
+        val donorInit: ByteArray? = null,
+        /**
+         * Neutralise the verified-boot spoof entries in the image's **own**
+         * init, instead of replacing the file. See [InitSpoof] and
+         * docs/INIT_SWAP_FIX.md.
+         *
+         * Preferred over [donorInit] where it applies: it needs no donor, it
+         * changes three bytes rather than the whole binary, and it leaves the
+         * ROM's remaining ~34 spoof entries working, so Play Integrity and
+         * friends survive. Images whose init has no spoof table are reported
+         * as not applicable rather than failing.
+         */
+        val fixInitSpoof: Boolean = false
     )
 
     interface Progress {
@@ -160,9 +172,19 @@ object GsiPatcher {
             val swap = InitSwap.apply(fs, options.donorInit)
             initNote = swap?.toString()
                 ?: (InitSwap.INIT_PATH + " not present in this image -- nothing to replace")
+        } else if (options.fixInitSpoof) {
+            progress.stage("Checking " + InitSpoof.INIT_PATH + " for verified-boot spoofing")
+            initNote = try {
+                InitSpoof.apply(fs)?.toString()
+                    ?: (InitSpoof.INIT_PATH + " not present in this image -- nothing to check")
+            } catch (e: InitSpoof.NotApplicable) {
+                // Not a failure: most images have no spoof table, and those
+                // need nothing done to them. Say so and carry on.
+                "no init patch needed -- " + e.message
+            }
         }
 
-        if (totalReplacements == 0 && options.donorInit == null) {
+        if (totalReplacements == 0 && options.donorInit == null && !options.fixInitSpoof) {
             throw IllegalStateException(
                 "no version properties needed changing: this image already reports release " +
                     options.targetRelease

@@ -48,6 +48,9 @@ private fun run(argv: Array<String>) {
                 "  --device-tee/-api/-keymint describe the target device, enabling the\n" +
                 "  device-vs-image assessment (the app reads these from the device itself).\n" +
                 "\n" +
+                "  --fix-init neutralises the verified-boot spoof entries in the image's\n" +
+                "  OWN init (3 bytes) -- preferred over a donor swap: no donor file, and\n" +
+                "  the ROM keeps its other spoofing. Confirmed on hardware.\n" +
                 "  --donor-init <file> replaces /system/bin/init with the given binary, and\n" +
                 "  --donor-image <gsi.img> takes that binary out of another (raw) GSI.\n" +
                 "  Use one when an image hangs at its own splash despite a correct version\n" +
@@ -69,6 +72,7 @@ private fun run(argv: Array<String>) {
     var teeRelease: String? = null
     var vendorApi: Int? = null
     var keymintVer: Int? = null
+    var fixInitSpoof = false
     var donorInitFile: File? = null
     var donorImageFile: File? = null
 
@@ -85,6 +89,7 @@ private fun run(argv: Array<String>) {
             "--device-tee" -> teeRelease = argv[++i]
             "--device-api" -> vendorApi = argv[++i].toIntOrNull()
             "--device-keymint" -> keymintVer = argv[++i].toIntOrNull()
+            "--fix-init" -> fixInitSpoof = true
             "--donor-init" -> donorInitFile = File(argv[++i])
             "--donor-image" -> donorImageFile = File(argv[++i])
             else -> {
@@ -104,6 +109,13 @@ private fun run(argv: Array<String>) {
             keymintAidlVersion = keymintVer
         ) else null
 
+    if (fixInitSpoof && (donorInitFile != null || donorImageFile != null)) {
+        System.err.println(
+            "use --fix-init or a donor, not both: they are two ways to fix the same blocker, " +
+                "and a donor overwrites the init --fix-init would have patched"
+        )
+        exitProcess(2)
+    }
     if (donorInitFile != null && donorImageFile != null) {
         System.err.println("use --donor-init or --donor-image, not both")
         exitProcess(2)
@@ -238,7 +250,7 @@ private fun run(argv: Array<String>) {
         ImageIo(raf.channel).use { io ->
             val report = GsiPatcher.patch(
                 io,
-                GsiPatcher.Options(release, patch, dropFec, enableAdb, donorInit),
+                GsiPatcher.Options(release, patch, dropFec, enableAdb, donorInit, fixInitSpoof),
                 keyFile?.readBytes(),
                 progress
             )

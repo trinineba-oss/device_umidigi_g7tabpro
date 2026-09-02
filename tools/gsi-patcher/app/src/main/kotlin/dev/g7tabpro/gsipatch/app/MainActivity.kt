@@ -56,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var patchBtn: Button
     private lateinit var checkBtn: Button
     private lateinit var adbBox: CheckBox
+    private lateinit var fixInitBox: CheckBox
     private lateinit var donorBtn: Button
     private lateinit var device: DeviceFacts
     private lateinit var releaseField: EditText
@@ -123,9 +124,20 @@ class MainActivity : Activity() {
         }
         root.addView(adbBox)
 
-        // Optional, and deliberately outside the numbered 1-2-3 flow: most
-        // images never need it. It is for the case where a GSI hangs at its own
-        // splash despite a correct version patch -- see docs/INIT_SWAP_FIX.md.
+        // Default ON. It is a no-op on images whose init has no spoof table
+        // (reported, not an error), and on images that do it is the fix that
+        // was confirmed on hardware -- three bytes, keeping the ROM's own
+        // Play Integrity spoofing. See docs/INIT_SWAP_FIX.md.
+        fixInitBox = CheckBox(this).apply {
+            text = "Fix init verified-boot spoofing (recommended)"
+            isChecked = true
+        }
+        root.addView(fixInitBox)
+
+        // The older, blunter form of the same fix, kept for the case where the
+        // three-byte patch does not apply: replaces init wholesale, which also
+        // discards the ROM's remaining spoofing. Outside the numbered flow
+        // because most images never need it.
         donorBtn = Button(this).apply {
             text = "Optional: replace init (donor GSI or init file)"
             setOnClickListener { pickDonor() }
@@ -245,6 +257,7 @@ class MainActivity : Activity() {
                 // should be rejected while the user is still looking at the
                 // picker rather than halfway through a patch.
                 donorBtn.isEnabled = false
+        fixInitBox.isEnabled = false
                 Thread {
                     try {
                         val donor = resolveDonor(uri)
@@ -253,6 +266,7 @@ class MainActivity : Activity() {
                         runOnUiThread {
                             donorBtn.text = "Optional: init from " + displayName(uri)
                             donorBtn.isEnabled = true
+            fixInitBox.isEnabled = true
                         }
                         appendLog(
                             "donor init: " + donor.size + " bytes from " + displayName(uri)
@@ -515,7 +529,10 @@ class MainActivity : Activity() {
                     io,
                     GsiPatcher.Options(
                     release, patch, dropFec = true, enableAdb = adbBox.isChecked,
-                    donorInit = donorUri?.let { resolveDonor(it) }
+                    donorInit = donorUri?.let { resolveDonor(it) },
+                    // A donor replaces the whole init, so patching it first
+                    // would be overwritten -- let the explicit choice win.
+                    fixInitSpoof = fixInitBox.isChecked && donorUri == null
                 ),
                     key,
                     object : GsiPatcher.Progress {
