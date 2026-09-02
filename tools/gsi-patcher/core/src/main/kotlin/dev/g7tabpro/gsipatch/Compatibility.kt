@@ -100,9 +100,16 @@ object Compatibility {
             "Infinity-X 3.12 BOOTS once its /system/bin/init is replaced with one from a GSI " +
                 "that boots here (confirmed on hardware). The version patch alone is not enough: " +
                 "it was applied correctly -- TEE and system both reading 13 -- and KeyMint still " +
-                "returned KEYMINT_NOT_CONFIGURED, because the vendor KeyMint HAL loses a " +
-                "servicemanager registration race and keystore2 caches an emulated fallback. " +
-                "Use the donor-init option; see docs/INIT_SWAP_FIX.md."),
+                "returned KEYMINT_NOT_CONFIGURED. CAUSE FOUND AND CONFIRMED ON HARDWARE " +
+                "2026-09-01: this ROM\'s init carries a Play-Integrity property table that " +
+                "sets ro.boot.vbmeta.device_state=locked, ro.boot.verifiedbootstate=green and " +
+                "a synthesised ro.boot.vbmeta.digest. The vendor KeyMint SERVICE binary reads " +
+                "exactly those three for its root of trust, and this bootloader publishes " +
+                "none of them, so the TA is handed a root of trust the device never had and " +
+                "never loads at all -- which is why keystore2 falls back to an emulated " +
+                "device. Either fix works: swap in a donor init, or neutralise just those " +
+                "three entries (3 bytes, tools/patch-init-spoof.py), which also KEEPS the " +
+                "ROM\'s remaining spoofing. See docs/INIT_SWAP_FIX.md."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 35, false,
             "Infinity-X 2.9 reverted instantly under DSU. That test predates the signing-key " +
                 "fix, so it is worth retrying before believing it."),

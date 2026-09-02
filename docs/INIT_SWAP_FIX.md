@@ -910,3 +910,91 @@ loads it.
 
 The rule generalises beyond strings: **confirm you are reading the artefact
 that actually runs.**
+
+---
+
+# CONFIRMED ON HARDWARE (2026-09-01): the root of trust, in three bytes
+
+`inf_init_norot3` was patched into a non-booting Infinity-X image with the app
+and **the image booted.**
+
+That closes the investigation this document opened. The mechanism is no longer
+inference:
+
+```
+failing init's property-load routine (fn 0xfa4ec) sets, unconditionally:
+    ro.boot.vbmeta.device_state = locked
+    ro.boot.verifiedbootstate   = green
+    ro.boot.vbmeta.digest       = <synthesised>
+  on a device whose bootloader publishes NONE of them
+  -> /vendor/bin/hw/android.hardware.security.keymint-service.trustkernel
+     reads exactly these three for its root of trust
+  -> the TA is handed a root of trust the device never had, and rejects
+  -> the TrustKernel trustlet never loads (zero TEE kernel lines)
+  -> keystore2 finds no IKeyMintDevice, caches the emulated fallback
+  -> generateKey returns -64 KEYMINT_NOT_CONFIGURED
+  -> vold cannot create the FBE key -> /data never mounts -> splash hang
+```
+
+**Three bytes**, at `0xfcc98`, `0xfce50`, `0xfd60c` — each an `add` immediate
+nudged by 3 so the entry writes an inert name and the real property is left
+**absent**, which is the state Project CiRCLE's init produces.
+
+## What this now explains, end to end
+
+| observation | explanation |
+|---|---|
+| zero TEE kernel lines on a bad boot, 34 on a good one | the TA rejects the fabricated RoT and never loads |
+| perfectly deterministic (2/2, 3/3) | a wrong constant, not a race |
+| the HAL "loses a registration race" by 2 ms | it never had anything to register — keystore2 gave up on a TA that would never appear |
+| swapping the whole init fixes it | Circle's init leaves the three properties absent |
+| AviumUI boots while carrying the property *names* | it has the names but no spoof table, so it never writes them |
+| the version patch alone is not enough | genuinely separate blocker (blocker 1) |
+| test 1 (repoint vbmeta device path) failed | the property was still set, from a fallback |
+| test 2 (rename the prefix) failed | the code uses the full names, never the prefix |
+| `ro.crypto.state` patch failed | right technique, wrong property |
+
+The **timing theory was wrong** (falsified on hardware), the **root-of-trust
+theory was right**, and the two failed root-of-trust patches failed on
+execution, not on the idea — exactly as recorded at the time.
+
+## Why this beats the init swap
+
+| | donor-init swap | `norot3` (3 bytes) |
+|---|---|---|
+| fixes the boot | yes | **yes** |
+| needs a donor file | yes | **no** |
+| keeps the ROM's Play Integrity spoofing | **no** | **yes** |
+| keeps `ro.build.tags` / `ro.debuggable` / `ro.secure` | **no** | **yes** |
+| bytes changed in `/system/bin/init` | 2.7 MB | **3** |
+| risk of donor/ROM version mismatch | real | none |
+
+The swap replaces the ROM's entire init and discards **all** of its spoofing.
+This removes only the three entries that break the boot, and the remaining ~34
+spoof entries keep working. **Worth verifying on the booted system:** Play
+Integrity, Wallet and banking apps should now behave as the ROM intended,
+unlike after a donor swap.
+
+## Which of the three is decisive — unmeasured
+
+All three were neutralised at once. Any one of them might be sufficient. This
+was deliberate: the goal was a working fix, and a three-way bisect would cost
+three more DSU cycles for no practical gain. Recorded so nobody later reads
+"all three matter" into a result that does not say so.
+
+## Artefacts
+
+```
+ff99b5e8b078638f1e6e2cd07d120af10264065ecd4a4dd7f031479091caf60d  inf_init_norot3      2724744  CONFIRMED [HW]
+f3efaf7e4aa5299f8bff18c9aa1f8bf46585d9637aa41cb8fddabf60a734dd9f  lunaris_init_norot3  2724864  untested
+```
+
+Regenerate for any affected init with:
+
+```sh
+tools/patch-init-spoof.py <init-in> <init-out>
+```
+
+It locates the spoof table structurally (the function materialising both
+`locked` and `green`), refuses on inits that have none, and leaves every
+legitimate reference alone.
