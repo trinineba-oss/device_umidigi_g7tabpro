@@ -949,17 +949,73 @@ Fixed by adding `vendor_property_contexts` lines 811-812.
 
 **Never flashed. Flashing vendor risks `/data`.**
 
+### 7.5 Extending the vendor patch to the root of trust [PC] — designed, not built
+
+Verified in `/vendor/bin/hw/android.hardware.security.keymint-service.trustkernel`
+(extracted from `vendor_a.img`, build 20241121):
+
+- it imports `property_get` (libcutils)
+- each of the three root-of-trust names is referenced **exactly once**
+- each is loaded into `x0` immediately before `bl property_get@plt`
+- all three share one default argument in `x2`, which points at the **empty
+  string**
+
+```
+  844c: adrp x0, ...          ; ro.boot.vbmeta.digest
+  8454: adrp x20, ...         ; x20 = "" (the default)
+  8464: bl   property_get
+  8484: adrp x0, ...          ; ro.boot.vbmeta.device_state
+  8494: bl   property_get
+  853c: adrp x0, ...          ; ro.boot.verifiedbootstate
+        bl   property_get
+```
+
+**Why the empty default is the whole trick.** On a boot that works today
+(Project CiRCLE's init, unlocked bootloader) these properties are *absent*, so
+`property_get` already returns `""` and KeyMint is fine. Redirecting the names
+to properties that are **never defined** reproduces that state permanently. We
+do not need to know the "right" root-of-trust values; we need the service to
+reliably read nothing, whatever a GSI's init writes.
+
+Replacements are shorter, so they are written in place and NUL-padded -- the
+same technique already proven on `libkeymint.so` at offsets 34768/34793:
+
+| original | len | replacement | len |
+|---|---|---|---|
+| `ro.boot.vbmeta.device_state` | 27 | `ro.boot.vbm_devstate` | 20 |
+| `ro.boot.vbmeta.digest` | 21 | `ro.boot.vbm_digest` | 18 |
+| `ro.boot.verifiedbootstate` | 25 | `ro.boot.vbm_state` | 17 |
+
+Keeping the `ro.boot.` prefix is deliberate: it leaves the SELinux property
+context unchanged, avoiding the class of failure that bootlooped the first
+vendor patch (§7.2). And because the new names are never *defined*, there is
+nothing to label -- that failure mode cannot recur at all.
+
+**What it would buy.** Blocker 1 is already handled vendor-side by the version
+redirect. This handles blocker 2 vendor-side too. Together: **any unmodified
+GSI boots, with no per-image patching** -- which is goal 2.
+
+**Caveats.** Untested; it needs a vendor flash, which risks `/data`. And it is
+strictly a device-side convenience -- the per-image fix already works and costs
+nothing, so this is worth doing for the "flash once, run anything" property
+rather than because anything is currently broken.
+
 ### 7.4 Does the init finding change the vendor patch? [INF]
 
 Probably not, and this matters for prioritisation. The vendor patch addresses
 the **OS version** the HAL reports (blocker 1). The init spoof concerns the
 **root of trust** (blocker 2). They are different inputs to the same TA.
 
-> **ANSWERED 2026-09-01 — and the answer is no.** `libkeymint.so` reads only
-> three properties, all version-related, and has no root-of-trust plumbing at
-> all (§5.8a). There is nothing to redirect: the RoT reaches the TEE by another
-> path, almost certainly bootloader-to-TEE directly. A vendor patch cannot
-> neutralise blocker 2 this way.
+> **ANSWERED 2026-09-02 — and the answer is YES.** (An earlier note here said
+> "no", from checking `libkeymint.so`. That was the wrong file; see §5.8a and
+> its own correction.) The vendor KeyMint **service binary** reads all three
+> root-of-trust properties via `property_get`, each exactly once, each with an
+> empty-string default. Redirecting those three names to vendor-owned names
+> that are never defined makes the service always read `""` -- which is exactly
+> the state a booting GSI produces -- regardless of what any GSI's init spoofs.
+>
+> Combined with the existing version redirect, that would make the vendor patch
+> fix **both** blockers, so an unmodified GSI boots. See §7.5.
 >
 > The upside: this **confirms the vendor patch is correctly targeted**. Its
 > documented offsets 34768 / 34793 are exactly the `0x87d0` / `0x87e9` string
