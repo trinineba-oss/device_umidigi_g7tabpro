@@ -23,7 +23,15 @@ class DeviceFacts(
      */
     val keymintAidlVersion: Int? = null,
     /** `Build.VERSION.RELEASE`; a fallback, not a substitute for [teeRelease]. */
-    val runningRelease: String? = null
+    val runningRelease: String? = null,
+    /**
+     * `ro.product.device` of the machine this is running on.
+     *
+     * The tested-image verdicts below were all established on one device, so
+     * they are only evidence *about* that device. This lets the report say so
+     * rather than presenting them as universal.
+     */
+    val deviceName: String? = null
 )
 
 /** What the image says about itself. */
@@ -54,6 +62,15 @@ object Compatibility {
 
     /** LineageOS 23.2 (sdk 36) boots on a vendor at API 31. */
     private const val LARGEST_GAP_KNOWN_TO_BOOT = 5
+
+    /**
+     * The device every verdict in [TESTED] was established on
+     * (`ro.product.device`). Anywhere else, those outcomes are somebody else's
+     * results: the KeyMint blocker is a property of a specific vendor TEE and
+     * the init blocker of a specific bootloader's verified-boot behaviour, so
+     * neither generalises on evidence we do not have.
+     */
+    private const val TESTED_ON_DEVICE = "g7tabpro"
 
     private class Tested(
         val match: Regex,
@@ -201,12 +218,28 @@ object Compatibility {
         val hit = TESTED.firstOrNull { t ->
             t.match.containsMatchIn(hay) && (t.sdk == null || t.sdk == image.sdk)
         }
+        // Only claim a verdict where it was actually established. Elsewhere the
+        // outcome is reported as another device's result, because that is what
+        // it is -- both blockers depend on vendor-specific behaviour.
+        val sameDevice = device.deviceName == null || device.deviceName == TESTED_ON_DEVICE
+        if (!sameDevice) {
+            out.add(Preflight.Finding(W,
+                "this is a " + device.deviceName + ", but every tested-image verdict below was " +
+                    "established on a " + TESTED_ON_DEVICE + ". They are reported as another " +
+                    "device's results, not predictions for this one: the version blocker " +
+                    "depends on what a particular vendor TEE was provisioned with, and the init " +
+                    "blocker on whether a particular bootloader publishes verified-boot state. " +
+                    "The patch itself is still sound -- only the verdicts do not transfer."))
+        }
+        val where = if (sameDevice) "this device" else "a " + TESTED_ON_DEVICE
         when {
             hit == null -> out.add(Preflight.Finding(I,
-                "this image has not been tested on this device, so there is no verdict for it " +
+                "this image has not been tested on " + where + ", so there is no verdict for it " +
                     "either way"))
-            hit.boots -> out.add(Preflight.Finding(I, "tested on this device: " + hit.note))
-            else -> out.add(Preflight.Finding(W, "tested on this device and it did NOT boot: " + hit.note))
+            hit.boots -> out.add(Preflight.Finding(
+                if (sameDevice) I else W, "tested on " + where + ": " + hit.note))
+            else -> out.add(Preflight.Finding(W,
+                "tested on " + where + " and it did NOT boot: " + hit.note))
         }
 
         // ---- a gap worth mentioning, stated as a fact rather than a prediction

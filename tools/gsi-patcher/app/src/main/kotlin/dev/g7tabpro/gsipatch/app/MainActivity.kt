@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private lateinit var checkBtn: Button
     private lateinit var adbBox: CheckBox
     private lateinit var fixInitBox: CheckBox
+    private lateinit var shareBtn: Button
     private lateinit var donorBtn: Button
     private lateinit var device: DeviceFacts
     private lateinit var releaseField: EditText
@@ -168,6 +169,15 @@ class MainActivity : Activity() {
             setPadding(0, pad, 0, 0)
         }
         root.addView(log)
+
+        // The log holds the evidence that matters -- which spoof entries were
+        // patched at which addresses, the old and new root digests, what
+        // verification concluded. Until now it was trapped in a TextView.
+        shareBtn = Button(this).apply {
+            text = "Share log"
+            setOnClickListener { shareLog() }
+        }
+        root.addView(shareBtn)
 
         val scroll = ScrollView(this)
         scroll.addView(root)
@@ -343,6 +353,10 @@ class MainActivity : Activity() {
         donorBtn.isEnabled = false
         progress.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Foreground priority for the whole run: KEEP_SCREEN_ON only protects
+        // this while the activity is visible, and a process killed midway
+        // leaves a truncated image that still looks like a complete file.
+        PatchService.start(this, "Patching " + (inputUri?.let { displayName(it) } ?: "image"))
 
         val release = releaseField.text.toString().trim()
         val patch = patchField.text.toString().trim()
@@ -383,6 +397,7 @@ class MainActivity : Activity() {
         patchBtn.isEnabled = false
         progress.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        PatchService.start(this, "Checking " + displayName(inUri))
 
         Thread {
             try {
@@ -435,9 +450,48 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /**
+     * Refuses the run if the destination cannot hold the finished image.
+     *
+     * The output is a SAF document with no file path, so `StatFs` cannot be
+     * used -- `fstatvfs` on the open descriptor reports the filesystem the
+     * document actually lives on.
+     *
+     * [compressedSize] is what was selected; a `.gz`/`.xz` GSI expands to
+     * several times that, so [expandFactor] is applied unless the input is
+     * already raw. Erring high is deliberate: the cost of a false warning is
+     * one dismissed message, the cost of running out is several minutes spent
+     * producing a truncated image.
+     */
+    private fun checkFreeSpace(outUri: Uri, compressedSize: Long, expandFactor: Int) {
+        if (compressedSize <= 0) return          // unknown size -- cannot judge
+        val needed = compressedSize * expandFactor
+        val free = try {
+            contentResolver.openFileDescriptor(outUri, "r")?.use { pfd ->
+                val st = android.system.Os.fstatvfs(pfd.fileDescriptor)
+                st.f_bavail * st.f_frsize
+            } ?: return
+        } catch (e: Exception) {
+            return                               // cannot measure -- do not block
+        }
+        if (free in 1 until needed) {
+            throw IllegalStateException(
+                "not enough free space where the output is being written: about " +
+                    (needed / (1L shl 20)) + " MB needed, " + (free / (1L shl 20)) +
+                    " MB available. Patching writes a full copy of the image, and " +
+                    "running out midway leaves a truncated file that still looks " +
+                    "complete -- so this stops now rather than after several minutes."
+            )
+        }
+    }
+
     private fun runPatch(inUri: Uri, outUri: Uri, release: String, patch: String) {
         appendLog("")
         var total = sizeOf(inUri)
+        // Checked before any work: a compressed GSI expands roughly 2.5-3x,
+        // and the finished image is written in full.
+        val rawInput = displayName(inUri).endsWith(".img")
+        checkFreeSpace(outUri, total, if (rawInput) 1 else 3)
         var written = 0L
         var lastPct = -1
 
@@ -586,6 +640,7 @@ class MainActivity : Activity() {
     // -------------------------------------------------------------------- ui
 
     private fun resetControls() {
+        PatchService.stop(this)
         runOnUiThread {
             working = false
             patchBtn.isEnabled = outputUri != null
@@ -596,6 +651,34 @@ class MainActivity : Activity() {
             progress.visibility = View.INVISIBLE
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    /**
+     * Hands the log to any app that takes text. Deliberately ACTION_SEND with
+     * EXTRA_TEXT rather than a file: these logs are tens of kilobytes, and a
+     * plain share sheet reaches chat, mail and notes without needing a
+     * FileProvider and its manifest surface.
+     */
+    private fun shareLog() {
+        val text = log.text.toString()
+        if (text.isBlank()) {
+            appendLog("nothing to share yet")
+            return
+        }
+        val header = "GsiKeyMintPatcher " + appVersion() + " on " +
+            android.os.Build.MODEL + " (" + android.os.Build.DEVICE + ")\n\n"
+        val i = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "GSI patch log")
+            putExtra(Intent.EXTRA_TEXT, header + text)
+        }
+        startActivity(Intent.createChooser(i, "Share log"))
+    }
+
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
     }
 
     /** Progress chatter stays on the bar; flooding the log would bury the report. */

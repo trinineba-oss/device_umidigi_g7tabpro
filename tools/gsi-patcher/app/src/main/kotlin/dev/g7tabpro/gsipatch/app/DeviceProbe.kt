@@ -35,7 +35,8 @@ object DeviceProbe {
             teeSecurityPatch = teePatchKey?.let { props[it] }?.ifBlank { null },
             vendorApiLevel = vendorApi,
             keymintAidlVersion = readKeymintVersion(),
-            runningRelease = Build.VERSION.RELEASE
+            runningRelease = Build.VERSION.RELEASE,
+            deviceName = props["ro.product.device"]?.ifBlank { null } ?: Build.DEVICE
         )
     }
 
