@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Light variant. The dark one lives in res/values-night/themes.xml and the
+  system picks between them; nothing in the app chooses a theme itself.
+
+  Deliberately plain Material rather than a custom palette: every control in
+  this UI is a stock widget created in code, so inheriting the platform theme
+  means they all follow the system's day/night colours with no per-widget
+  styling to keep in sync.
+-->
+<resources>
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light" />
+</resources>

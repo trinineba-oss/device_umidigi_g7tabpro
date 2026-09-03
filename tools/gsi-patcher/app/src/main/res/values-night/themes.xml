@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dark variant, selected by the -night resource qualifier when the system is
+  in dark mode. Same style name as res/values/themes.xml so the manifest
+  points at one theme and the platform resolves which.
+
+  Note on reach: the -night qualifier is driven by UiModeManager, and a
+  system-wide dark setting only exists from API 29. On API 26-28 (this app's
+  minSdk is 26) the light theme simply stays selected, which is correct
+  behaviour rather than a bug.
+
+  MainActivity does not include uiMode in its configChanges, so toggling dark
+  mode recreates the activity and the new theme applies immediately.
+-->
+<resources>
+    <style name="AppTheme" parent="@android:style/Theme.Material" />
+</resources>

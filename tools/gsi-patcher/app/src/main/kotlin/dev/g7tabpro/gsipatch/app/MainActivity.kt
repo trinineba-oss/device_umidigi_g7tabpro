@@ -160,7 +160,11 @@ class MainActivity : Activity() {
         log = TextView(this).apply {
             typeface = Typeface.MONOSPACE
             textSize = 12f
-            setTextColor(Color.DKGRAY)
+            // Resolved from the theme, not hardcoded: this is the only colour
+            // the UI sets itself, and a fixed dark grey is unreadable against
+            // the dark theme's background. Every other widget is stock and
+            // follows the platform theme on its own.
+            setTextColor(themeColor(android.R.attr.textColorSecondary, Color.DKGRAY))
             setPadding(0, pad, 0, 0)
         }
         root.addView(log)
@@ -172,6 +176,17 @@ class MainActivity : Activity() {
         appendLog("device: TEE expects Android " + (device.teeRelease ?: "unknown") +
             ", vendor API " + (device.vendorApiLevel?.toString() ?: "?") +
             ", KeyMint " + (device.keymintAidlVersion?.let { "V" + it } ?: "version unreadable"))
+    }
+
+    /**
+     * A colour from the active theme, so the UI follows light/dark without the
+     * app deciding which is in force. [fallback] covers a theme that does not
+     * define the attribute at all.
+     */
+    private fun themeColor(attr: Int, fallback: Int): Int {
+        val tv = android.util.TypedValue()
+        if (!theme.resolveAttribute(attr, tv, true)) return fallback
+        return if (tv.resourceId != 0) resources.getColor(tv.resourceId, theme) else tv.data
     }
 
     // ---------------------------------------------------------------- pickers

@@ -149,6 +149,40 @@ object Preflight {
             findings.add(Finding(Severity.INFO, "image API level: $sdk (framework behaviour unchanged by the patch)"))
         }
 
+        // --- the second, independent blocker: init's verified-boot spoof ---
+        //
+        // Reported before the patch runs so the init fix is legible rather
+        // than magic. Read-only: this only says what is there.
+        val initIno = try { fs.lookup(InitSpoof.INIT_PATH) } catch (e: Exception) { null }
+        if (initIno == null) {
+            findings.add(Finding(Severity.INFO,
+                InitSpoof.INIT_PATH + " is not present in this image"))
+        } else {
+            try {
+                val writes = InitSpoof.inspect(fs.readFile(initIno))
+                if (writes.isEmpty()) {
+                    findings.add(Finding(Severity.INFO,
+                        "init has a Play Integrity spoof table, but it writes none of the " +
+                            "root-of-trust properties -- nothing here blocks boot"))
+                } else {
+                    findings.add(Finding(Severity.WARNING,
+                        "init's spoof table writes " + writes.size + " root-of-trust " +
+                            "propert" + (if (writes.size == 1) "y" else "ies") + " (" +
+                            writes.joinToString(", ") + "). On a device whose bootloader " +
+                            "publishes none of these, the vendor KeyMint service is handed a " +
+                            "root of trust the device never had and the TA refuses to load, " +
+                            "so the image hangs at its own splash. Patching neutralises these " +
+                            "entries and leaves the rest of the ROM's spoofing intact."))
+                }
+            } catch (e: InitSpoof.NotApplicable) {
+                findings.add(Finding(Severity.INFO,
+                    "init carries no verified-boot spoof table -- this image needs no init patch"))
+            } catch (e: Exception) {
+                findings.add(Finding(Severity.INFO,
+                    "could not inspect init (" + (e.message ?: e.toString()) + ")"))
+            }
+        }
+
         // --- the authoritative check: the prop files init actually reads ---
         //
         // Only a value inside a real build.prop can affect the runtime. Judge

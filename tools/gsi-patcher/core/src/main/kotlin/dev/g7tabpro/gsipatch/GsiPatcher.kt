@@ -238,6 +238,11 @@ object GsiPatcher {
         if (!sawPatch) {
             throw IllegalStateException("verification failed: security_patch was not applied")
         }
+        // And the same for init, against the bytes actually written. apply()
+        // already proved they landed; this proves they mean what was intended.
+        if (options.donorInit == null && options.fixInitSpoof) {
+            InitSpoof.verifyPatched(verifyFs)
+        }
         val reread = Avb(io)
         if (reread.rootDigest.hex() != newRoot.hex()) {
             throw IllegalStateException("verification failed: root digest did not stick")

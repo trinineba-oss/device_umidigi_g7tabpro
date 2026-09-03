@@ -300,6 +300,72 @@ object InitSpoof {
         return Scan(refs, arr)
     }
 
+    // ------------------------------------------------------------- inspect
+
+    /**
+     * Which of [properties] this init's spoof table still writes.
+     *
+     * Read-only, and the counterpart to [patch]: on an unpatched init it names
+     * what would be neutralised, and on a patched one it must come back empty.
+     * Throws [NotApplicable] when there is no spoof table at all.
+     *
+     * References *outside* the spoof table are legitimate AOSP code and are
+     * never counted -- the same rule [patch] applies before touching anything.
+     */
+    fun inspect(elf: ByteArray, properties: List<String> = ROOT_OF_TRUST): List<String> {
+        val segs = loadSegments(elf)
+        val fingerprintAddrs = FINGERPRINT.associateWith { findString(elf, segs, it) }
+        for ((lit, addrs) in fingerprintAddrs) {
+            if (addrs.isEmpty()) throw NotApplicable(
+                "this image's init contains no \"$lit\" literal, so it has no verified-boot " +
+                    "spoof table"
+            )
+        }
+        val propAddrs = properties.associateWith { findString(elf, segs, it) }
+        val wanted = HashSet<Long>()
+        fingerprintAddrs.values.forEach { wanted.addAll(it) }
+        propAddrs.values.forEach { wanted.addAll(it) }
+        val sc = scan(elf, segs, wanted)
+
+        fun functionsFor(addrs: List<Long>): Set<Long> =
+            addrs.flatMap { a -> sc.refs[a].orEmpty().mapNotNull { sc.enclosing(it.site) } }.toSet()
+
+        val spoofFns = FINGERPRINT
+            .map { functionsFor(fingerprintAddrs.getValue(it)) }
+            .reduce { a, b -> a intersect b }
+        if (spoofFns.isEmpty()) throw NotApplicable(
+            "this image's init has the spoof literals but no single function references both, " +
+                "so no spoof table could be located"
+        )
+        return properties.filter { p ->
+            propAddrs.getValue(p).any { a ->
+                sc.refs[a].orEmpty().any { sc.enclosing(it.site) in spoofFns }
+            }
+        }
+    }
+
+    /**
+     * Re-reads `/system/bin/init` out of [fs] and throws unless its spoof table
+     * writes none of [properties].
+     *
+     * Called after patching, against the bytes actually written. The read-back
+     * check inside [apply] proves the bytes landed; this proves they *mean*
+     * what was intended -- a distinction this project has paid for more than
+     * once by verifying the wrong artefact.
+     */
+    fun verifyPatched(fs: Ext4, properties: List<String> = ROOT_OF_TRUST) {
+        val ino = (try { fs.lookup(INIT_PATH) } catch (e: Exception) { null }) ?: return
+        val remaining = try {
+            inspect(fs.readFile(ino), properties)
+        } catch (e: NotApplicable) {
+            return          // no table at all -- nothing could have been missed
+        }
+        check(remaining.isEmpty()) {
+            "verification failed: after patching, init's spoof table still writes " +
+                remaining.joinToString(", ")
+        }
+    }
+
     // -------------------------------------------------------------- patch
 
     /**
