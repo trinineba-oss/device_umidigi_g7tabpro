@@ -855,3 +855,86 @@ INIT_SWAP_FIX.md. The review was written against documents predating that
 correction.
 
 Its §5 was not received; the uploaded file is truncated at line 124, mid-command.
+
+---
+
+## 15. Device overlay investigation (2026-09-02/03) — CLOSED, negative
+
+**Question:** stock ships a device-specific RRO; does a GSI need an equivalent
+overlay to reach full hardware function?
+
+**Answer: no.** Every testable prediction failed on hardware. Recorded so this
+is not re-investigated.
+
+### 15.1 What stock actually ships
+
+`/product/overlay` on the stock ROM contains one device-specific overlay --
+`framework-res__auto_generated_rro_product.apk`, **39 overridden resources**.
+Everything else there is generic AOSP/GMS boilerplate (DisplayCutout*,
+NavigationBarMode*, GmsConfigOverlay*) that any GSI also carries.
+
+### 15.2 Already handled by the GSI's own RROs
+
+Comparing stock against the Circle GSI's `framework-res__circle_gsi__auto_
+generated_rro_product.apk` -- **not** against the framework baseline, which
+would have wildly overstated the gap:
+
+| resource | stock | GSI |
+|---|---|---|
+| `config_enableMultiUserUI` | true | true |
+| `config_multiuserMaximumUsers` | 4 | 5 |
+| `config_setColorTransformAccelerated` | true | true |
+| `config_unplugTurnsOnScreen` | true | true |
+| `config_tether_usb_regexs` | `rndis\d` | `usb\d`, `rndis\d` |
+| `config_tether_bluetooth_regexs` | `bt-pan`, `bt-dun` | `bnep\d`, `bt-pan` |
+
+### 15.3 Predictions that were WRONG [HW]
+
+**WiFi tethering.** Predicted broken: stock uses `ap\d`, and the GSI's
+*framework-res* list (`wlan0`, `softap.*`, `wifi_br0`, `wigig0`) matches no
+`ap0`. **Hotspot works.** Cause of the error: since Android 11 tethering is a
+**mainline module**, and `TetheringConfiguration` reads the resource from
+`com.android.tethering.apex`, not framework-res. The module's own value:
+
+```
+config_tether_wifi_regexs OVERLAYABLE
+  ["wlan\d", "softap\d", "ap_br_wlan\d", "ap_br_softap\d"]
+```
+
+`ap_br_wlan\d` is MediaTek's bridged softAP name -- it matches. The
+framework-res array is a superseded leftover.
+
+**Headphone jack.** Predicted affected: `config_useDevInputEventForAudioJack`
+is true on stock, false on the GSI, and no GSI RRO overrides it. **Headphones
+work.** The flag selects *which* detection mechanism `WiredAccessoryManager`
+uses -- input-subsystem events vs the switch/`h2w` uevent path. Both are valid
+and this kernel supports both.
+
+### 15.4 What survives, and why it does not justify an overlay
+
+- `xml/power_profile` -- GSI ships a generic one. Real, but it affects battery
+  *estimation* and per-app attribution, not battery life or function.
+- `config_hotswapCapable` -- SIM hotswap without reboot. Untested, minor.
+- `config_showNavigationBar` -- false on the GSI, but the nav bar works;
+  runtime-derived.
+
+### 15.5 The method error, stated plainly
+
+Two predictions, both wrong, both the same mistake: **inferring functional
+breakage from a config difference.** A differing value is not a broken feature
+when a second valid mechanism exists, or when the resource compared is not the
+one consulted at runtime.
+
+That second half is this project's recurring failure, now on its fourth
+appearance -- `libkeymint.so` instead of the KeyMint service binary,
+`ramdisk.img` instead of the TWRP ramdisk fragment, `framework-res` instead of
+the Tethering module. **Before comparing a config, identify the component that
+reads it.**
+
+### 15.6 Also settled
+
+Stock has `config_device_volte_available`, `config_device_vt_available` and
+`config_device_wfc_ims_available` all **false**. There is no VoLTE, video
+calling or WiFi calling on this device to lose under a GSI -- it was never
+enabled. The MediaTek IWLAN service-class strings in the stock RRO are
+therefore inert too.
