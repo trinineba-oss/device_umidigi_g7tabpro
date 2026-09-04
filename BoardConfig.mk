@@ -271,6 +271,16 @@ BOARD_MKBOOTIMG_ARGS += --board ""
 #      are re-enabled below on the strength of this reasoning. Not yet
 #      confirmed on hardware that decryption actually succeeds — only that the
 #      recovery can be made to report 13, and that this build compiles.
+#
+#      SUPPORTING EVIDENCE (2026-09-04): the premise now has hardware behind
+#      it, from ordinary use rather than a deliberate test. A dirty-flash chain
+#      of stock 13 -> patched LOS 21 -> patched LOS 22 kept /data intact across
+#      two major Android versions, because every image was patched to report 13
+#      and the FBE keys were created under 13. Hold the reported version steady
+#      and the keys stay unwrappable — exactly the mechanism this recovery fix
+#      relies on, exercised in the working direction. It does not make the fix
+#      verified (only a flash does), but the premise is no longer pure
+#      inference. See docs/PROJECT_DOSSIER.md section 16.
 # ---------------------------------------------------------------------------
 # Anti-rollback hack: pins security patch/version to absurdly future
 # values so TEE/RPMB-level downgrade rejection doesn't kick in — this
