@@ -938,3 +938,63 @@ Stock has `config_device_volte_available`, `config_device_vt_available` and
 calling or WiFi calling on this device to lose under a GSI -- it was never
 enabled. The MediaTek IWLAN service-class strings in the stock RRO are
 therefore inert too.
+
+---
+
+## 16. The version patch also makes `/data` portable across ROM changes [HW]
+
+Reported 2026-09-04. Not something this project set out to test -- it fell out
+of ordinary use, and it is the first real-world evidence behind a fix that is
+still marked untested.
+
+### 16.1 What happened
+
+A dirty-flash chain, keeping `/data` throughout:
+
+```
+stock Android 13        -> FBE keys created under OS_VERSION 13
+patched LineageOS 21    -> reports 13 -> keys unwrap -> /data survives
+patched LineageOS 22    -> reports 13 -> keys unwrap -> /data survives
+```
+
+Two major Android versions apart, no wipe, everything working.
+
+### 16.2 Why it worked
+
+Keymaster/KeyMint embeds `OS_VERSION` in a key's authorization list **at
+creation** and validates it **on use**. `/data`'s FBE keys were created while
+the system reported 13, so only a system also reporting 13 can unwrap them.
+
+Every ROM in that chain was version-patched to 13, so the *reported* version
+never moved even though the actual Android release went 13 -> 14 -> 15.
+
+**So the version patch is not only a boot fix.** It is also what keeps `/data`
+readable across ROM changes. That consequence was never stated in
+KEYMINT_OS_VERSION_FIX.md, which frames the patch purely as the thing that
+stops the splash hang.
+
+### 16.3 Why this matters for the TWRP fix
+
+`BoardConfig.mk` reasons that a twrp-12.1 recovery reporting **12** cannot
+unwrap keys created under **13**, which is why `/data` decryption hangs, and
+that `PLATFORM_VERSION_LAST_STABLE=13` should fix it. That was tagged
+**UNTESTED -- reasoning from the GSI fix, not a verified recovery change**.
+
+It is the same mechanism, and the chain above exercises it in the working
+direction: hold the reported version at 13 and the keys stay usable across
+completely different systems. That does not make the recovery fix verified --
+only a flash does -- but it moves the premise from inference to something with
+hardware evidence behind it.
+
+### 16.4 Practical consequences
+
+- **Patch every image to 13, without exception.** The constant is not
+  arbitrary; it is what `/data`'s existing keys were created under. An image
+  reporting anything else cannot read them.
+- **This is the upgrade path.** LOS 23 booted under DSU, so a patched LOS 23
+  dirty-flashed over 22 should preserve `/data` the same way -- same constant,
+  same keys, no wipe.
+- **The failure mode is lost access, not silent corruption.** A system
+  reporting the wrong version cannot unwrap the keys, so `/data` fails to
+  mount rather than being re-keyed behind your back. Recoverable by going back
+  to something that reports 13.
