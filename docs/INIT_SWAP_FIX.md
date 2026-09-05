@@ -1080,3 +1080,82 @@ cli image.img.xz --out patched.img --fix-init --key testkey.pkcs8.der
 | works on an image whose ROM has no donor available | no | **yes** |
 
 The donor path stays for images this does not apply to.
+
+---
+
+# CORRECTION (2026-09-05): the bootloader DOES publish verified-boot state
+
+Everything above repeats a premise that is **false**, now that a rooted live
+device has been inspected: *"this device's bootloader publishes none of them."*
+
+`/proc/cmdline` carries no verified-boot arguments — which is presumably where
+that belief came from. But this device passes them through **bootconfig**
+instead, and they are honest:
+
+```
+$ cat /proc/bootconfig
+androidboot.vbmeta.device_state = "unlocked"
+androidboot.verifiedbootstate   = "orange"
+```
+
+## What this changes, and what it does not
+
+**The fix is untouched.** Neutralising the three root-of-trust entries still
+boots previously-hanging images, confirmed on hardware. Nothing about the
+three-byte patch changes.
+
+**The mechanism gets stronger, not weaker.** It was described as an init
+fabricating values into a vacuum. It is really an init **overwriting honest,
+bootloader-supplied values with contradictory ones**, before KeyMint reads
+them:
+
+```
+bootloader (bootconfig)  unlocked / orange     <- what the TEE itself believes
+failing init, EARLY      locked / green        <- overwrites, pre-KeyMint
+KeyMint service          reads locked / green, hands them to the TA
+TA                       independently knows unlocked / orange -> CONTRADICTION
+                         -> refuses to configure -> never loads
+```
+
+A TA being told something that contradicts what it already knows is a much more
+natural rejection than one being handed values for properties it has never seen.
+
+## The control that was sitting in plain sight
+
+The daily driver **sets exactly the same values** — `locked` and `green` — via
+Magisk (`playintegrityfix`, `tricky_store`), and boots perfectly:
+
+```
+ro.boot.vbmeta.device_state = locked        (Magisk, post-fs-data)
+ro.boot.verifiedbootstate   = green         (Magisk, post-fs-data)
+ro.keymaster.xxx.vbmeta_state      = unlocked   (honest, read earlier)
+ro.keymaster.xxx.verifiedbootstate = orange     (honest, read earlier)
+```
+
+Identical properties, identical values, opposite outcome. The only variable is
+**when** the write happens: Magisk writes at `post-fs-data`, long after KeyMint
+has read the honest values and configured successfully; the failing init writes
+during early property load, before it.
+
+**So timing is decisive, not content.** That is precisely the "ordering, not
+content" alternative raised in the external review of 2026-09-01 (its section
+2.1), which was noted as surviving and then never pursued. It was right.
+
+## Consequences
+
+1. **A late restore is not merely possible — it is already running.** The idea
+   floated earlier (set the spoofed values after boot, so Play Integrity sees
+   them without breaking KeyMint) is exactly what Magisk does on this device
+   today. It needs no ext4 file creation and no new patcher feature; Magisk
+   already solves it, which retires that proposal for good.
+
+2. **The `-64` in the init case is a contradiction rejection**, not a
+   provisioning failure. Worth keeping distinct from blocker 1, where the TA
+   rejects an OS version it was never provisioned with.
+
+3. **Check `/proc/bootconfig`, not just `/proc/cmdline`.** On this Android
+   generation the boot arguments moved. An empty `cmdline` grep is not evidence
+   the bootloader is silent — it is evidence you read the wrong channel. That is
+   the fifth instance in this project of analysing the wrong artefact.
+
+Full capture: [DEVICE_SNAPSHOT.md](DEVICE_SNAPSHOT.md).
