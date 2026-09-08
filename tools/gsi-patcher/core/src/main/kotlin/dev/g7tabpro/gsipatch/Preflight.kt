@@ -168,11 +168,12 @@ object Preflight {
                     findings.add(Finding(Severity.WARNING,
                         "init's spoof table writes " + writes.size + " root-of-trust " +
                             "propert" + (if (writes.size == 1) "y" else "ies") + " (" +
-                            writes.joinToString(", ") + "). On a device whose bootloader " +
-                            "publishes none of these, the vendor KeyMint service is handed a " +
-                            "root of trust the device never had and the TA refuses to load, " +
-                            "so the image hangs at its own splash. Patching neutralises these " +
-                            "entries and leaves the rest of the ROM's spoofing intact."))
+                            writes.joinToString(", ") + "). These are written during early " +
+                            "boot, overwriting what the bootloader reported, and the vendor " +
+                            "KeyMint service reads them for its root of trust -- so the TA is " +
+                            "told something that contradicts what it already knows, refuses to " +
+                            "load, and the image hangs at its own splash. Patching neutralises " +
+                            "these entries and leaves the rest of the ROM's spoofing intact."))
                 }
             } catch (e: InitSpoof.NotApplicable) {
                 findings.add(Finding(Severity.INFO,

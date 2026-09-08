@@ -379,7 +379,13 @@ class MainActivity : Activity() {
             } catch (t: Throwable) {
                 appendLog("")
                 appendLog("FAILED: " + (t.message ?: t.toString()))
-                appendLog("The output file is incomplete and must not be flashed.")
+                // Leaving a half-written image on disk under a normal-looking
+                // name is the most dangerous thing this app could do: it is
+                // indistinguishable from a good one until someone flashes it.
+                // Truncating makes it unmistakably unusable, which matches the
+                // rule the rest of the tool follows -- refuse rather than ship
+                // something that looks fine and fails at boot.
+                appendLog(truncateFailedOutput(outUri))
             } finally {
                 resetControls()
             }
@@ -679,6 +685,22 @@ class MainActivity : Activity() {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
     } catch (e: Exception) {
         "?"
+    }
+
+    /**
+     * Empties a failed run's output file so it cannot be mistaken for a good
+     * image, and reports what happened. Never throws -- this runs on the
+     * failure path, where a second exception would bury the first.
+     */
+    private fun truncateFailedOutput(outUri: Uri): String = try {
+        // "rwt" truncates on open; a zero-byte file cannot be flashed and
+        // cannot be confused for a finished image.
+        contentResolver.openFileDescriptor(outUri, "rwt")?.close()
+        "The output was incomplete, so it has been emptied -- it cannot be flashed. " +
+            "Delete it and start again."
+    } catch (e: Throwable) {
+        "The output file is incomplete and MUST NOT be flashed -- delete it manually " +
+            "(could not empty it automatically: " + (e.message ?: e.toString()) + ")"
     }
 
     /** Progress chatter stays on the bar; flooding the log would bury the report. */

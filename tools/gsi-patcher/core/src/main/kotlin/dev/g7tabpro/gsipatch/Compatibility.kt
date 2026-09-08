@@ -121,10 +121,13 @@ object Compatibility {
                 "2026-09-01: this ROM\'s init carries a Play-Integrity property table that " +
                 "sets ro.boot.vbmeta.device_state=locked, ro.boot.verifiedbootstate=green and " +
                 "a synthesised ro.boot.vbmeta.digest. The vendor KeyMint SERVICE binary reads " +
-                "exactly those three for its root of trust, and this bootloader publishes " +
-                "none of them, so the TA is handed a root of trust the device never had and " +
-                "never loads at all -- which is why keystore2 falls back to an emulated " +
-                "device. Either fix works: swap in a donor init, or neutralise just those " +
+                "exactly those three for its root of trust. The bootloader DOES publish them " +
+                "(honestly, as unlocked/orange, via bootconfig), so the init is not filling a " +
+                "vacuum -- it overwrites them with contradictory values before KeyMint reads, " +
+                "and the TA refuses to load, which is why keystore2 falls back to an emulated " +
+                "device. Timing is what decides it: Magisk sets the SAME values later, at " +
+                "post-fs-data, and boots fine. Either fix works: swap in a donor init, or " +
+                "neutralise just those " +
                 "three entries (3 bytes, tools/patch-init-spoof.py), which also KEEPS the " +
                 "ROM\'s remaining spoofing. See docs/INIT_SWAP_FIX.md."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 35, false,

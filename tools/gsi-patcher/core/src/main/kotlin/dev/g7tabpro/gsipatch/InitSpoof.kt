@@ -6,8 +6,8 @@ package dev.g7tabpro.gsipatch
  *
  * Background: [docs/INIT_SWAP_FIX.md]. Some GSI inits carry a hardcoded ~37
  * entry property table -- a Play Integrity spoof -- that runs inside init's
- * property-loading routine on every boot. Three of its entries are decisive on
- * a device whose bootloader publishes no verified-boot state:
+ * property-loading routine on every boot. Three of its entries are decisive,
+ * because the vendor KeyMint service reads exactly these for its root of trust:
  *
  * ```
  * ro.boot.vbmeta.device_state = locked
@@ -16,10 +16,20 @@ package dev.g7tabpro.gsipatch
  * ```
  *
  * The vendor KeyMint **service binary** reads exactly those three to build its
- * root of trust. Handed values the device never had, the TA rejects and never
- * loads; keystore2 then finds no `IKeyMintDevice`, caches an emulated fallback,
- * `generateKey` returns `-64 KEYMINT_NOT_CONFIGURED`, vold cannot create the
- * FBE key, `/data` never mounts, and the GSI hangs at its own splash.
+ * root of trust. The bootloader does publish them -- honestly, as
+ * `unlocked`/`orange`, via bootconfig rather than the kernel cmdline -- so the
+ * failing init is not filling a vacuum: it **overwrites** them with
+ * contradictory values before KeyMint reads. Told something that contradicts
+ * what it already knows, the TA rejects and never loads; keystore2 then finds
+ * no `IKeyMintDevice`, caches an emulated fallback, `generateKey` returns
+ * `-64 KEYMINT_NOT_CONFIGURED`, vold cannot create the FBE key, `/data` never
+ * mounts, and the GSI hangs at its own splash.
+ *
+ * **Timing is what decides it, not the values.** Magisk sets the identical
+ * `locked`/`green` pair on a working system via `resetprop`, and it boots --
+ * because that happens at `post-fs-data`, long after KeyMint has read the
+ * honest values and configured successfully. Only an early write, before that
+ * read, is harmful. Confirmed on a live rooted device 2026-09-05.
  *
  * Confirmed on hardware 2026-09-01: neutralising these three entries -- **three
  * bytes** -- boots a previously non-booting Infinity-X image.
