@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private lateinit var checkBtn: Button
     private lateinit var adbBox: CheckBox
     private lateinit var fixInitBox: CheckBox
+    private lateinit var rootBox: CheckBox
     private lateinit var shareBtn: Button
     private lateinit var donorBtn: Button
     private lateinit var device: DeviceFacts
@@ -68,7 +69,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        device = DeviceProbe.read()
+        device = DeviceProbe.read(Root.knownAvailable())
 
         val pad = (16 * resources.displayMetrics.density).toInt()
         val root = LinearLayout(this).apply {
@@ -134,6 +135,36 @@ class MainActivity : Activity() {
             isChecked = true
         }
         root.addView(fixInitBox)
+
+        // Off by default: nothing here requires root, and an unexpected
+        // superuser prompt is worse than a check that politely says it could
+        // not run. Ticking it probes immediately -- see Root -- so the prompt
+        // appears now rather than minutes into a multi-gigabyte write.
+        rootBox = CheckBox(this).apply {
+            text = "Use root to check SELinux policy conflicts"
+            isChecked = false
+            setOnCheckedChangeListener { _, checked ->
+                if (!checked) return@setOnCheckedChangeListener
+                isEnabled = false
+                text = "Checking for root..."
+                Thread {
+                    val ok = Root.available()
+                    val rules = if (ok) VendorPolicy.read(true) else null
+                    runOnUiThread {
+                        isEnabled = true
+                        if (ok) {
+                            text = "Use root to check SELinux policy conflicts"
+                            appendLog("   root: " + (rules?.note ?: "granted"))
+                        } else {
+                            isChecked = false
+                            text = "Use root to check SELinux policy conflicts"
+                            appendLog("   root: not available -- policy conflicts cannot be checked")
+                        }
+                    }
+                }.start()
+            }
+        }
+        root.addView(rootBox)
 
         // The older, blunter form of the same fix, kept for the case where the
         // three-byte patch does not apply: replaces init wholesale, which also
@@ -603,7 +634,7 @@ class MainActivity : Activity() {
                 // Read this device's own SELinux rules so the image can be
                 // checked for genfscon conflicts. Needs root; without it the
                 // patcher reports the check as not performed, never as clean.
-                val vendorPolicy = VendorPolicy.read()
+                val vendorPolicy = VendorPolicy.read(rootBox.isChecked)
                 appendLog("   " + vendorPolicy.note)
                 val report = GsiPatcher.patch(
                     io,

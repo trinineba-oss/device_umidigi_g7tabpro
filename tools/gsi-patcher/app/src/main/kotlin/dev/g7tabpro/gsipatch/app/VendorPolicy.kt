@@ -25,26 +25,35 @@ object VendorPolicy {
 
     class Result(val rules: List<Sepolicy.Rule>, val note: String)
 
-    fun read(): Result {
-        val direct = readAll { f -> if (f.canRead()) f.readText(Charsets.ISO_8859_1) else null }
+    fun read(useRoot: Boolean): Result {
+        val direct = readAll(useRoot) { f ->
+            if (f.canRead()) f.readText(Charsets.ISO_8859_1) else null
+        }
         if (direct.isNotEmpty()) {
             return Result(direct, "read " + direct.size + " vendor genfscon rules directly")
         }
-        val rooted = readAll { f -> suCat(f.path) }
-        if (rooted.isNotEmpty()) {
-            return Result(rooted, "read " + rooted.size + " vendor genfscon rules via su")
+        if (useRoot && Root.available()) {
+            val rooted = readAll(true) { f -> Root.run(listOf("cat", f.path)) }
+            if (rooted.isNotEmpty()) {
+                return Result(rooted, "read " + rooted.size + " vendor genfscon rules using root")
+            }
         }
         return Result(
             emptyList(),
-            "could not read this device's SELinux policy (/vendor/etc/selinux is denied to " +
-                "apps and su is unavailable), so GSI policy conflicts cannot be checked"
+            if (useRoot)
+                "could not read this device's SELinux policy even with root, so GSI policy " +
+                    "conflicts cannot be checked"
+            else
+                "this device's SELinux policy is not readable without root " +
+                    "(/vendor/etc/selinux is denied to apps), so GSI policy conflicts were " +
+                    "NOT checked -- enable the root option to check them"
         )
     }
 
-    private fun readAll(load: (File) -> String?): List<Sepolicy.Rule> {
+    private fun readAll(useRoot: Boolean, load: (File) -> String?): List<Sepolicy.Rule> {
         val out = ArrayList<Sepolicy.Rule>()
         for (dir in Sepolicy.VENDOR_POLICY_DIRS) {
-            val files = listCil(dir)
+            val files = listCil(dir, useRoot)
             for (f in files) {
                 val text = try { load(f) } catch (e: Exception) { null } ?: continue
                 out.addAll(Sepolicy.parse(text, "vendor/" + f.name))
@@ -59,11 +68,12 @@ object VendorPolicy {
      * `listFiles` returns null when the directory itself is unreadable, which
      * is the normal case here, so fall back to asking `su` to list it.
      */
-    private fun listCil(dir: String): List<File> {
+    private fun listCil(dir: String, useRoot: Boolean): List<File> {
         File(dir).listFiles()?.let { entries ->
             return entries.filter { it.isFile && it.name.endsWith(".cil") }
         }
-        val listing = suRun(listOf("ls", "-1", dir)) ?: return emptyList()
+        if (!useRoot) return emptyList()
+        val listing = Root.run(listOf("ls", "-1", dir)) ?: return emptyList()
         return listing.lineSequence()
             .map { it.trim() }
             .filter { it.endsWith(".cil") }
@@ -71,24 +81,4 @@ object VendorPolicy {
             .toList()
     }
 
-    private fun suCat(path: String): String? = suRun(listOf("cat", path))
-
-    /**
-     * Runs one command as root, or returns null if that is not possible.
-     *
-     * Deliberately quiet: an absent `su` throws IOException, a denied one exits
-     * non-zero, and neither is an error worth surfacing -- it just means the
-     * check cannot be done on this device.
-     */
-    private fun suRun(cmd: List<String>): String? = try {
-        val proc = ProcessBuilder(listOf("su", "-c", cmd.joinToString(" ")))
-            .redirectErrorStream(false)
-            .start()
-        val text = proc.inputStream.bufferedReader(Charsets.ISO_8859_1).use { it.readText() }
-        if (proc.waitFor() == 0 && text.isNotEmpty()) text else null
-    } catch (e: Exception) {
-        null
-    } catch (e: Error) {
-        null
-    }
 }

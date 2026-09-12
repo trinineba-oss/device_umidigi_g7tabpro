@@ -14,7 +14,7 @@ import java.io.File
  */
 object DeviceProbe {
 
-    fun read(): DeviceFacts {
+    fun read(useRoot: Boolean = false): DeviceFacts {
         val props = allProps()
 
         // The property carrying the version the bootloader handed the TEE is
@@ -34,7 +34,7 @@ object DeviceProbe {
             teeRelease = teeReleaseKey?.let { props[it] }?.ifBlank { null },
             teeSecurityPatch = teePatchKey?.let { props[it] }?.ifBlank { null },
             vendorApiLevel = vendorApi,
-            keymintAidlVersion = readKeymintVersion(),
+            keymintAidlVersion = readKeymintVersion(useRoot),
             runningRelease = Build.VERSION.RELEASE,
             deviceName = props["ro.product.device"]?.ifBlank { null } ?: Build.DEVICE
         )
@@ -58,18 +58,40 @@ object DeviceProbe {
      * with no <version> is version 1.
      *
      * Usually unreadable: /vendor/etc is vendor_configs_file and app domains
-     * are denied it. Returning null is expected, not a failure.
+     * are denied it. Returning null is expected, not a failure -- but when the
+     * user has enabled the root option, the same wall can simply be stepped
+     * over, so try that before giving up.
      */
-    private fun readKeymintVersion(): Int? = try {
+    private fun readKeymintVersion(useRoot: Boolean): Int? =
+        readKeymintVersionDirect() ?: if (useRoot) readKeymintVersionRooted() else null
+
+    /** Grep the manifest set for the keymint HAL's declared version. */
+    private fun versionFrom(xml: String): Int? {
+        val hal = xml.substringAfter("security.keymint", "")
+        if (hal.isEmpty()) return null
+        return Regex("<version>\\s*(\\d+)").find(hal)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+    }
+
+    private fun readKeymintVersionRooted(): Int? = try {
+        val dirs = Root.run(listOf("ls", "-1", "/vendor/etc/vintf/manifest", "/vendor/etc/vintf"))
+        val name = dirs?.lineSequence()?.map { it.trim() }
+            ?.firstOrNull { it.contains("keymint", ignoreCase = true) && it.endsWith(".xml") }
+        val text = name?.let {
+            Root.run(listOf("cat", "/vendor/etc/vintf/manifest/" + it))
+                ?: Root.run(listOf("cat", "/vendor/etc/vintf/" + it))
+        }
+        text?.let { versionFrom(it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun readKeymintVersionDirect(): Int? = try {
         val dirs = listOf(File("/vendor/etc/vintf/manifest"), File("/vendor/etc/vintf"))
         val file = dirs.asSequence()
             .mapNotNull { it.listFiles()?.asSequence() }
             .flatten()
             .firstOrNull { it.isFile && it.name.contains("keymint", ignoreCase = true) }
-        file?.readText()?.let { xml ->
-            val hal = xml.substringAfter("security.keymint", "")
-            Regex("<version>\\s*(\\d+)").find(hal)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-        }
+        file?.readText()?.let { versionFrom(it) }
     } catch (e: Exception) {
         null
     } catch (e: Error) {
