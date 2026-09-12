@@ -11,8 +11,8 @@ android {
         applicationId = "dev.g7tabpro.gsipatch"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "5.5"
+        versionCode = 14
+        versionName = "5.6"
     }
 
     buildTypes {

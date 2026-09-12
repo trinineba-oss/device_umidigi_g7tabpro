@@ -600,6 +600,11 @@ class MainActivity : Activity() {
             val readCh = FileInputStream(readPfd.fileDescriptor).channel
             val writeCh = FileOutputStream(writePfd.fileDescriptor).channel
             ImageIo(readCh, writeCh).use { io ->
+                // Read this device's own SELinux rules so the image can be
+                // checked for genfscon conflicts. Needs root; without it the
+                // patcher reports the check as not performed, never as clean.
+                val vendorPolicy = VendorPolicy.read()
+                appendLog("   " + vendorPolicy.note)
                 val report = GsiPatcher.patch(
                     io,
                     GsiPatcher.Options(
@@ -607,7 +612,8 @@ class MainActivity : Activity() {
                     donorInit = donorUri?.let { resolveDonor(it) },
                     // A donor replaces the whole init, so patching it first
                     // would be overwritten -- let the explicit choice win.
-                    fixInitSpoof = fixInitBox.isChecked && donorUri == null
+                    fixInitSpoof = fixInitBox.isChecked && donorUri == null,
+                    vendorGenfscon = vendorPolicy.rules
                 ),
                     key,
                     object : GsiPatcher.Progress {

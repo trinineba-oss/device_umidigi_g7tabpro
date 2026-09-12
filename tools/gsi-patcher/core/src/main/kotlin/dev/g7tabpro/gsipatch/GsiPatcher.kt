@@ -36,7 +36,27 @@ object GsiPatcher {
          * friends survive. Images whose init has no spoof table are reported
          * as not applicable rather than failing.
          */
-        val fixInitSpoof: Boolean = false
+        val fixInitSpoof: Boolean = false,
+        /**
+         * Arbitrary files to replace inside the image, keyed by their path.
+         * See [FileSwap] -- added for the DSU first-stage daemons (`snapuserd`,
+         * `gsid`), which are the suspected cause of instant DSU reverts and
+         * which no amount of init patching can reach.
+         */
+        val fileSwaps: Map<String, ByteArray> = emptyMap(),
+        /**
+         * The target device's own `genfscon` rules, read from its
+         * `/vendor/etc/selinux` and `/odm/etc/selinux`. When supplied, any GSI
+         * rule that claims the same path with a different context is commented
+         * out -- otherwise `secilc` refuses to compile the combined policy and
+         * init fatal-reboots in second stage, with no boot animation to show
+         * for it. See [Sepolicy].
+         *
+         * Empty means "not checked", never "no conflicts": without the device's
+         * rules there is nothing to compare against, and deleting policy on a
+         * guess is worse than leaving it alone.
+         */
+        val vendorGenfscon: List<Sepolicy.Rule> = emptyList()
     )
 
     interface Progress {
@@ -59,7 +79,8 @@ object GsiPatcher {
         val fecDropped: Boolean,
         val signingKeyReplaced: Boolean,
         val adbNote: String = "unchanged",
-        val initNote: String = "unchanged"
+        val initNote: String = "unchanged",
+        val sepolicyNote: String = "not checked (no vendor policy supplied)"
     ) {
         override fun toString(): String = buildString {
             appendLine("partition    : " + partitionName)
@@ -72,7 +93,8 @@ object GsiPatcher {
                 if (signingKeyReplaced) " (embedded key replaced with the AOSP test key)" else "")
             appendLine("fec          : " + if (fecDropped) "dropped (descriptor zeroed)" else "unchanged")
             appendLine("adb          : " + adbNote)
-            append("init         : " + initNote)
+            appendLine("init         : " + initNote)
+            append("sepolicy     : " + sepolicyNote)
         }
     }
 
@@ -184,7 +206,32 @@ object GsiPatcher {
             }
         }
 
-        if (totalReplacements == 0 && options.donorInit == null && !options.fixInitSpoof) {
+        val swapNotes = ArrayList<String>()
+        for ((path, bytes) in options.fileSwaps) {
+            progress.stage("Replacing " + path)
+            swapNotes.add(try {
+                FileSwap.apply(fs, path, bytes).toString()
+            } catch (e: FileSwap.NotPresent) {
+                path + ": not present in this image -- nothing to replace"
+            })
+        }
+        if (swapNotes.isNotEmpty()) {
+            initNote = (if (initNote == "unchanged") "" else initNote + "\n") +
+                swapNotes.joinToString("\n")
+        }
+
+        var sepolicyNote = "not checked (no vendor policy supplied)"
+        var sepolicyChanged = false
+        if (options.vendorGenfscon.isNotEmpty()) {
+            progress.stage("Checking SELinux genfscon rules against the vendor policy")
+            val r = Sepolicy.apply(fs, options.vendorGenfscon)
+            sepolicyNote = r.toString()
+            sepolicyChanged = r.filesChanged.isNotEmpty()
+            r.conflicts.forEach { sepolicyNote += "\n    " + it }
+        }
+
+        if (totalReplacements == 0 && options.donorInit == null && !options.fixInitSpoof &&
+            options.fileSwaps.isEmpty() && !sepolicyChanged) {
             throw IllegalStateException(
                 "no version properties needed changing: this image already reports release " +
                     options.targetRelease
@@ -290,7 +337,8 @@ object GsiPatcher {
                     "ro.debuggable, and a line cannot be added in place -- adb may still " +
                     "be unavailable if it fails to boot"
             },
-            initNote = initNote
+            initNote = initNote,
+            sepolicyNote = sepolicyNote
         )
     }
 }

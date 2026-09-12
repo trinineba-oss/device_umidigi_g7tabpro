@@ -48,6 +48,16 @@ private fun run(argv: Array<String>) {
                 "  --device-tee/-api/-keymint describe the target device, enabling the\n" +
                 "  device-vs-image assessment (the app reads these from the device itself).\n" +
                 "\n" +
+                "  --vendor-selinux <file|dir> reads the target device's SELinux policy\n" +
+                "  (a *.cil file, or a directory such as an extracted /vendor/etc/selinux).\n" +
+                "  Repeatable. Any genfscon rule in the GSI that claims the same path as the\n" +
+                "  vendor with a different context is commented out. Without this the policy\n" +
+                "  may not compile on the device, and init fatal-reboots in second stage with\n" +
+                "  no boot animation -- the AxionOS failure, confirmed and fixed on hardware.\n" +
+                "  --swap <path-in-image>=<file> replaces any file inside the image,\n" +
+                "  preserving its inode and SELinux label. Repeatable. Added for the DSU\n" +
+                "  first-stage daemons (/system/bin/snapuserd, /system/bin/gsid), which\n" +
+                "  run before init and which no init patch can reach.\n" +
                 "  --fix-init neutralises the verified-boot spoof entries in the image's\n" +
                 "  OWN init (3 bytes) -- preferred over a donor swap: no donor file, and\n" +
                 "  the ROM keeps its other spoofing. Confirmed on hardware.\n" +
@@ -73,6 +83,8 @@ private fun run(argv: Array<String>) {
     var vendorApi: Int? = null
     var keymintVer: Int? = null
     var fixInitSpoof = false
+    val fileSwaps = LinkedHashMap<String, java.io.File>()
+    val vendorSelinux = ArrayList<java.io.File>()
     var donorInitFile: File? = null
     var donorImageFile: File? = null
 
@@ -90,6 +102,17 @@ private fun run(argv: Array<String>) {
             "--device-api" -> vendorApi = argv[++i].toIntOrNull()
             "--device-keymint" -> keymintVer = argv[++i].toIntOrNull()
             "--fix-init" -> fixInitSpoof = true
+            "--swap" -> {
+                // --swap /system/bin/snapuserd=/path/to/donor
+                val spec = argv[++i]
+                val eq = spec.indexOf('=')
+                if (eq <= 0) {
+                    System.err.println("--swap needs <path-in-image>=<local-file>, got: " + spec)
+                    exitProcess(2)
+                }
+                fileSwaps[spec.substring(0, eq)] = File(spec.substring(eq + 1))
+            }
+            "--vendor-selinux" -> vendorSelinux.add(File(argv[++i]))
             "--donor-init" -> donorInitFile = File(argv[++i])
             "--donor-image" -> donorImageFile = File(argv[++i])
             else -> {
@@ -250,7 +273,16 @@ private fun run(argv: Array<String>) {
         ImageIo(raf.channel).use { io ->
             val report = GsiPatcher.patch(
                 io,
-                GsiPatcher.Options(release, patch, dropFec, enableAdb, donorInit, fixInitSpoof),
+                GsiPatcher.Options(
+                    release, patch, dropFec, enableAdb, donorInit, fixInitSpoof,
+                    fileSwaps.mapValues { (_, f) ->
+                        if (!f.isFile) {
+                            System.err.println("no such donor file: " + f); exitProcess(1)
+                        }
+                        f.readBytes()
+                    },
+                    readVendorGenfscon(vendorSelinux)
+                ),
                 keyFile?.readBytes(),
                 progress
             )
@@ -273,4 +305,33 @@ private fun run(argv: Array<String>) {
         }
     }
     println("done in " + ((System.currentTimeMillis() - started) / 1000) + "s")
+}
+
+/**
+ * Every `genfscon` rule in the policy files under [paths].
+ *
+ * A path may be a single `.cil` file or a directory of them -- an extracted
+ * `/vendor/etc/selinux` is the usual case. Unreadable entries are reported and
+ * skipped rather than aborting: a partial vendor policy still finds real
+ * conflicts, and an empty result is handled as "not checked" downstream.
+ */
+private fun readVendorGenfscon(paths: List<java.io.File>): List<dev.g7tabpro.gsipatch.Sepolicy.Rule> {
+    val out = ArrayList<dev.g7tabpro.gsipatch.Sepolicy.Rule>()
+    for (p in paths) {
+        val files = when {
+            p.isDirectory -> p.listFiles()?.filter { it.isFile && it.name.endsWith(".cil") } ?: emptyList()
+            p.isFile -> listOf(p)
+            else -> {
+                System.err.println("no such vendor policy path: " + p); emptyList()
+            }
+        }
+        for (f in files) {
+            out.addAll(
+                dev.g7tabpro.gsipatch.Sepolicy.parse(
+                    f.readText(Charsets.ISO_8859_1), "vendor/" + f.name
+                )
+            )
+        }
+    }
+    return out
 }
