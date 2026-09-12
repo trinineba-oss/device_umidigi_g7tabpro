@@ -151,22 +151,35 @@ internal object Ext4Alloc {
     }
 
     /**
-     * crc16 of the filesystem UUID + group number + the descriptor with its own
-     * checksum field zeroed -- the `GDT_CSUM` (uninit_bg) scheme.
+     * crc16 of the filesystem UUID + group number + the descriptor, under the
+     * `GDT_CSUM` (uninit_bg) scheme.
+     *
+     * The checksum field itself is **skipped**, not zeroed. That distinction is
+     * not cosmetic: feeding two zero bytes through crc16 where the kernel feeds
+     * nothing produces a different value, and the descriptor then fails
+     * `ext4_check_descriptors` at mount. The kernel logs one line and mounts
+     * anyway, so the damage is invisible until something else goes looking --
+     * it cost a boot cycle to notice. Mirrors `ext4_group_desc_csum`: crc over
+     * `[0, 0x1E)`, then resume at `0x20` for 64-byte descriptors.
      */
     private fun groupDescCsum(fs: Ext4, group: Long, gd: ByteArray): Int {
         val uuid = fs.ioRef.read(fs.sbOffset + 0x68, 16)
-        val body = gd.copyOf()
-        body[0x1E] = 0; body[0x1F] = 0
         var crc = crc16(0xFFFF, uuid, uuid.size)
         val g = byteArrayOf(
             (group and 0xFF).toByte(), ((group shr 8) and 0xFF).toByte(),
             ((group shr 16) and 0xFF).toByte(), ((group shr 24) and 0xFF).toByte()
         )
         crc = crc16(crc, g, 4)
-        crc = crc16(crc, body, body.size)
+        crc = crc16(crc, gd.copyOfRange(0, CSUM_OFFSET), CSUM_OFFSET)
+        if (gd.size > CSUM_OFFSET + 2) {
+            val tail = gd.copyOfRange(CSUM_OFFSET + 2, gd.size)
+            crc = crc16(crc, tail, tail.size)
+        }
         return crc and 0xFFFF
     }
+
+    /** `offsetof(struct ext4_group_desc, bg_checksum)`. */
+    private const val CSUM_OFFSET = 0x1E
 
     /** The CRC-16/ARC variant the kernel's `ext4_group_desc_csum` uses. */
     private fun crc16(seed: Int, data: ByteArray, len: Int): Int {
