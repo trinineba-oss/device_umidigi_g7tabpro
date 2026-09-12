@@ -49,20 +49,38 @@ package dev.g7tabpro.gsipatch
  */
 object Sepolicy {
 
-    /** One `genfscon` rule, located precisely enough to edit it. */
+    /**
+     * One context-assignment statement, located precisely enough to edit it.
+     *
+     * [kind] is the CIL statement name. [selector] is everything that names
+     * *what* is being labelled, normalised: for `genfscon` that is the
+     * filesystem and path, for `fs_use_xattr` just the filesystem, for
+     * `portcon` the protocol and port range. Two statements collide when their
+     * kind and selector match but their [context] differs.
+     */
     data class Rule(
         val source: String,
         val line: Int,
-        val fs: String,
-        val path: String,
+        val kind: String,
+        val selector: String,
         val context: String
     ) {
-        val key: Pair<String, String> get() = fs to path
+        val key: Pair<String, String> get() = kind to selector
+        override fun toString(): String = kind + " " + selector
     }
 
     data class Conflict(val gsi: Rule, val vendor: Rule) {
+        /**
+         * Only `genfscon` is safe to remove automatically. It labels one path.
+         * `fs_use_*` governs how an entire filesystem is labelled, and
+         * `portcon`/`nodecon` cover whole ranges -- dropping one of those to
+         * make a policy compile trades a diagnosable build failure for an
+         * undiagnosable runtime one, so those are reported and left alone.
+         */
+        val autoFixable: Boolean get() = gsi.kind == "genfscon"
+
         override fun toString(): String =
-            gsi.source + ":" + gsi.line + "  " + gsi.fs + " " + gsi.path +
+            gsi.source + ":" + gsi.line + "  " + gsi.kind + " " + gsi.selector +
                 "  (gsi " + gsi.context + " vs vendor " + vendor.context + ")"
     }
 
@@ -101,14 +119,25 @@ object Sepolicy {
         "/odm/etc/selinux"
     )
 
+    /**
+     * The CIL statements that bind a context to something, and that therefore
+     * cannot be declared twice with different contexts.
+     */
+    private val KINDS = setOf(
+        "genfscon", "fs_use_xattr", "fs_use_task", "fs_use_trans",
+        "portcon", "netifcon", "nodecon"
+    )
+
     // (genfscon sysfs "/some/path" (u object_r some_type ((s0) (s0))))
-    // The path is quoted in some policies and bare in others.
+    // (fs_use_xattr ext4 (u object_r labeledfs ((s0) (s0))))
+    // Everything between the statement name and the context s-expression is the
+    // selector; paths are quoted in some policies and bare in others.
     private val RULE = Regex(
-        """^\s*\(genfscon\s+(\S+)\s+"?([^"\s)]+)"?\s+\(\s*\S+\s+\S+\s+([A-Za-z0-9_]+)"""
+        """^\s*\(([a-z_]+)\s+([^()]*?)\s*\(\s*\S+\s+\S+\s+([A-Za-z0-9_]+)"""
     )
 
     /**
-     * Every single-line `genfscon` rule in [text].
+     * Every single-line context-assignment statement in [text].
      *
      * Rules split across lines are deliberately not returned. They are rare,
      * and this object's only edit is a single-character line comment, which
@@ -118,8 +147,12 @@ object Sepolicy {
         val out = ArrayList<Rule>()
         text.split('\n').forEachIndexed { i, raw ->
             val m = RULE.find(raw) ?: return@forEachIndexed
+            val kind = m.groupValues[1]
+            if (kind !in KINDS) return@forEachIndexed
             if (!isSelfContained(raw)) return@forEachIndexed
-            out.add(Rule(source, i + 1, m.groupValues[1], m.groupValues[2], m.groupValues[3]))
+            val selector = m.groupValues[2].replace("\"", "").trim().replace(Regex("\\s+"), " ")
+            if (selector.isEmpty()) return@forEachIndexed
+            out.add(Rule(source, i + 1, kind, selector, m.groupValues[3]))
         }
         return out
     }
@@ -183,8 +216,9 @@ object Sepolicy {
             if (idx !in split.indices) { skipped.add("line $n is past the end of the file"); continue }
             val line = split[idx]
             val open = line.indexOf('(')
-            if (open < 0 || !line.substring(open).startsWith("(genfscon")) {
-                skipped.add("line $n no longer looks like a genfscon rule")
+            val head = if (open < 0) "" else line.substring(open)
+            if (KINDS.none { head.startsWith("(" + it + " ") }) {
+                skipped.add("line $n no longer looks like a context-assignment rule")
                 continue
             }
             if (!isSelfContained(line)) {
@@ -199,6 +233,37 @@ object Sepolicy {
                 "); refusing, because that would force a relocation this path does not do"
         }
         return out to skipped
+    }
+
+    /**
+     * The sepolicy version mapping a device needs, and whether the image has it.
+     *
+     * A vendor built against sepolicy version *N* requires the GSI to ship
+     * `/system/etc/selinux/mapping/N.cil`, which translates the vendor's
+     * versioned types onto the platform's current ones. Without it `secilc`
+     * fails and init fatal-reboots in second stage -- the same silent,
+     * animation-less reboot a genfscon conflict produces, and just as easy to
+     * misread as a mount failure.
+     *
+     * GSIs drop old mappings as releases age, so this is the way a device with
+     * an older vendor stops booting *new* GSIs while still booting old ones.
+     * Nothing in this patcher can synthesise a missing mapping, so the only
+     * useful thing to do is say so plainly, before the flash.
+     *
+     * [version] comes from the device's `/vendor/etc/selinux/plat_sepolicy_vers.txt`
+     * (e.g. `31.0`). Null means it could not be read, which is reported as
+     * unchecked rather than as fine.
+     */
+    fun mappingProblem(fs: Ext4, version: String?): String? {
+        if (version.isNullOrBlank()) return null
+        val v = version.trim()
+        val path = "/system/etc/selinux/mapping/" + v + ".cil"
+        val present = (try { fs.lookup(path) } catch (e: Exception) { null }) != null
+        if (present) return null
+        return "this device's vendor is built against sepolicy version " + v +
+            ", but the image does not ship " + path + ". The policy cannot compile " +
+            "on this device and init will fatal-reboot in second stage, with no boot " +
+            "animation. This image is not usable here; try an older GSI."
     }
 
     /**
@@ -224,7 +289,17 @@ object Sepolicy {
             val found = conflicts(rules, vendorRules)
             if (found.isEmpty()) continue
 
-            val (patched, refused) = neutralise(bytes, found.map { it.gsi.line }.toSet())
+            val (fixable, manual) = found.partition { it.autoFixable }
+            manual.forEach {
+                skipped.add(
+                    it.toString() + " -- a " + it.gsi.kind + " rule covers more than one path, " +
+                        "so removing it automatically would trade a build failure for a " +
+                        "runtime one. Resolve this by hand."
+                )
+            }
+            if (fixable.isEmpty()) { allConflicts.addAll(found); continue }
+
+            val (patched, refused) = neutralise(bytes, fixable.map { it.gsi.line }.toSet())
             fs.writeFileInPlace(ino, patched)
 
             val readBack = fs.readFile(ino)

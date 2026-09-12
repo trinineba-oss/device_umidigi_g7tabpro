@@ -54,6 +54,9 @@ private fun run(argv: Array<String>) {
                 "  vendor with a different context is commented out. Without this the policy\n" +
                 "  may not compile on the device, and init fatal-reboots in second stage with\n" +
                 "  no boot animation -- the AxionOS failure, confirmed and fixed on hardware.\n" +
+                "  --vendor-sepolicy-vers <n.n> is the vendor's sepolicy version, normally\n" +
+                "  picked up from plat_sepolicy_vers.txt beside --vendor-selinux. The image\n" +
+                "  must ship mapping/<n.n>.cil or its policy cannot compile on the device.\n" +
                 "  --swap <path-in-image>=<file> replaces any file inside the image,\n" +
                 "  preserving its inode and SELinux label. Repeatable. Added for the DSU\n" +
                 "  first-stage daemons (/system/bin/snapuserd, /system/bin/gsid), which\n" +
@@ -85,6 +88,7 @@ private fun run(argv: Array<String>) {
     var fixInitSpoof = false
     val fileSwaps = LinkedHashMap<String, java.io.File>()
     val vendorSelinux = ArrayList<java.io.File>()
+    var vendorSepolicyVers: String? = null
     var donorInitFile: File? = null
     var donorImageFile: File? = null
 
@@ -113,6 +117,7 @@ private fun run(argv: Array<String>) {
                 fileSwaps[spec.substring(0, eq)] = File(spec.substring(eq + 1))
             }
             "--vendor-selinux" -> vendorSelinux.add(File(argv[++i]))
+            "--vendor-sepolicy-vers" -> vendorSepolicyVers = argv[++i]
             "--donor-init" -> donorInitFile = File(argv[++i])
             "--donor-image" -> donorImageFile = File(argv[++i])
             else -> {
@@ -281,7 +286,8 @@ private fun run(argv: Array<String>) {
                         }
                         f.readBytes()
                     },
-                    readVendorGenfscon(vendorSelinux)
+                    readVendorGenfscon(vendorSelinux),
+                    vendorSepolicyVers ?: readSepolicyVers(vendorSelinux)
                 ),
                 keyFile?.readBytes(),
                 progress
@@ -334,4 +340,21 @@ private fun readVendorGenfscon(paths: List<java.io.File>): List<dev.g7tabpro.gsi
         }
     }
     return out
+}
+
+/**
+ * The vendor's sepolicy version, if `plat_sepolicy_vers.txt` sits beside one of
+ * the policy paths the caller gave.
+ *
+ * Convenient rather than clever: an extracted `/vendor/etc/selinux` contains
+ * that file, so pointing --vendor-selinux at the directory supplies the version
+ * too and there is nothing extra to remember.
+ */
+private fun readSepolicyVers(paths: List<java.io.File>): String? {
+    for (p in paths) {
+        val dir = if (p.isDirectory) p else p.parentFile ?: continue
+        val f = java.io.File(dir, "plat_sepolicy_vers.txt")
+        if (f.isFile) return f.readText().trim().ifBlank { null }
+    }
+    return null
 }

@@ -23,19 +23,31 @@ import java.io.File
  */
 object VendorPolicy {
 
-    class Result(val rules: List<Sepolicy.Rule>, val note: String)
+    class Result(
+        val rules: List<Sepolicy.Rule>,
+        val note: String,
+        /**
+         * The sepolicy version this vendor is built against, from
+         * `/vendor/etc/selinux/plat_sepolicy_vers.txt`. The image must ship the
+         * matching `mapping/<version>.cil` or its policy cannot compile here.
+         */
+        val sepolicyVersion: String? = null
+    )
 
     fun read(useRoot: Boolean): Result {
+        val version = readVersion(useRoot)
         val direct = readAll(useRoot) { f ->
             if (f.canRead()) f.readText(Charsets.ISO_8859_1) else null
         }
         if (direct.isNotEmpty()) {
-            return Result(direct, "read " + direct.size + " vendor genfscon rules directly")
+            return Result(direct, "read " + direct.size + " vendor genfscon rules directly", version)
         }
         if (useRoot && Root.available()) {
             val rooted = readAll(true) { f -> Root.run(listOf("cat", f.path)) }
             if (rooted.isNotEmpty()) {
-                return Result(rooted, "read " + rooted.size + " vendor genfscon rules using root")
+                return Result(
+                    rooted, "read " + rooted.size + " vendor genfscon rules using root", version
+                )
             }
         }
         return Result(
@@ -46,8 +58,22 @@ object VendorPolicy {
             else
                 "this device's SELinux policy is not readable without root " +
                     "(/vendor/etc/selinux is denied to apps), so GSI policy conflicts were " +
-                    "NOT checked -- enable the root option to check them"
+                    "NOT checked -- enable the root option to check them",
+            version
         )
+    }
+
+    /**
+     * The vendor's sepolicy version, or null if it cannot be read.
+     *
+     * Small enough to be worth a separate read: it decides whether the image
+     * can compile a policy here at all, independently of any rule conflict.
+     */
+    private fun readVersion(useRoot: Boolean): String? {
+        val f = File("/vendor/etc/selinux/plat_sepolicy_vers.txt")
+        val text = (try { if (f.canRead()) f.readText() else null } catch (e: Exception) { null })
+            ?: if (useRoot && Root.available()) Root.run(listOf("cat", f.path)) else null
+        return text?.trim()?.ifBlank { null }
     }
 
     private fun readAll(useRoot: Boolean, load: (File) -> String?): List<Sepolicy.Rule> {

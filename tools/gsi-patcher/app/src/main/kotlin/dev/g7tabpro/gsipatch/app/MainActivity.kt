@@ -644,7 +644,8 @@ class MainActivity : Activity() {
                     // A donor replaces the whole init, so patching it first
                     // would be overwritten -- let the explicit choice win.
                     fixInitSpoof = fixInitBox.isChecked && donorUri == null,
-                    vendorGenfscon = vendorPolicy.rules
+                    vendorGenfscon = vendorPolicy.rules,
+                    vendorSepolicyVersion = vendorPolicy.sepolicyVersion
                 ),
                     key,
                     object : GsiPatcher.Progress {

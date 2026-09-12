@@ -56,7 +56,16 @@ object GsiPatcher {
          * rules there is nothing to compare against, and deleting policy on a
          * guess is worse than leaving it alone.
          */
-        val vendorGenfscon: List<Sepolicy.Rule> = emptyList()
+        val vendorGenfscon: List<Sepolicy.Rule> = emptyList(),
+        /**
+         * The sepolicy version this device's vendor is built against, from its
+         * `/vendor/etc/selinux/plat_sepolicy_vers.txt` (e.g. `31.0`). When set,
+         * the image is checked for the matching
+         * `/system/etc/selinux/mapping/<version>.cil` and the patch is refused
+         * if it is missing, since no such image can boot here. Null skips the
+         * check. See [Sepolicy.mappingProblem].
+         */
+        val vendorSepolicyVersion: String? = null
     )
 
     interface Progress {
@@ -145,6 +154,15 @@ object GsiPatcher {
 
         progress.stage("Opening filesystem")
         val fs = Ext4(io)
+
+        // Before the first write, not after. A missing version mapping cannot
+        // be patched around, so the only useful response is to stop -- and
+        // stopping half way through would leave the output file modified with
+        // a hashtree that no longer matches it, which is worse than not
+        // starting. Cheap enough to be the first thing checked.
+        Sepolicy.mappingProblem(fs, options.vendorSepolicyVersion)?.let {
+            throw IllegalStateException(it)
+        }
 
         // Collect every build.prop present, not the first match: see the note
         // on BUILD_PROP_PATHS. Missing ones are normal and skipped silently.
