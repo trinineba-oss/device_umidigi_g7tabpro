@@ -21,6 +21,22 @@ import kotlin.system.exitProcess
  * destination in place. A raw image with no --out is patched in place directly.
  */
 fun main(argv: Array<String>) {
+    // Standalone: read a dumped MediaTek expdb partition. No image argument.
+    //   gsipatch --boot-log expdb.bin [--digest <root digest>]
+    if (argv.isNotEmpty() && argv[0] == "--boot-log") {
+        if (argv.size < 2) {
+            System.err.println("--boot-log needs a dumped expdb file"); exitProcess(2)
+        }
+        val dump = File(argv[1])
+        if (!dump.isFile) {
+            System.err.println("no such file: " + dump); exitProcess(1)
+        }
+        val digestAt = argv.indexOf("--digest")
+        val digest = if (digestAt >= 0 && digestAt + 1 < argv.size) argv[digestAt + 1] else null
+        val attempts = dump.inputStream().buffered().use { dev.g7tabpro.gsipatch.BootLog.scan(it) }
+        println(dev.g7tabpro.gsipatch.BootLog.report(attempts, digest))
+        exitProcess(0)
+    }
     try {
         run(argv)
     } catch (e: Exception) {
@@ -43,6 +59,9 @@ private fun run(argv: Array<String>) {
                 "\n" +
                 "  --preflight checks an image and exits without modifying it; the exit\n" +
                 "  code is non-zero when a blocker is found.\n" +
+                "  --boot-log <expdb.bin> [--digest <root digest>] reads a dumped MediaTek\n" +
+                "  expdb partition and reports why GSI boots crashed, per image. Standalone,\n" +
+                "  with no image argument. Dump it with: dd if=/dev/block/by-name/expdb\n" +
                 "  --enable-adb turns off adb authorisation in the image, so a failed boot\n" +
                 "  can still be diagnosed over adb.\n" +
                 "  --device-tee/-api/-keymint describe the target device, enabling the\n" +
@@ -196,6 +215,14 @@ private fun run(argv: Array<String>) {
     // error, regardless of whether the underlying image is actually fine.
     val target: File
     val source = unwrapped.inputStream().use { probe -> Compression.open(probe).kind }
+    // Refuse EROFS before decompressing gigabytes into a file that can never be patched.
+    val erofs = unwrapped.inputStream().use { probe ->
+        dev.g7tabpro.gsipatch.ImageFormat.looksLikeErofs(Compression.open(probe).stream.readNBytes(1028))
+    }
+    if (erofs) {
+        System.err.println("error: " + dev.g7tabpro.gsipatch.ImageFormat.EROFS_MESSAGE)
+        exitProcess(1)
+    }
     // A container/payload extraction always lands in workDir under a
     // generated name, never the user's own file -- always copy it to an
     // explicit --out rather than silently "patching in place" somewhere the
@@ -240,6 +267,10 @@ private fun run(argv: Array<String>) {
         if (unwrapped !== input) unwrapped.delete()
     }
 
+    // Read once: preflight and the patch both need the vendor's policy.
+    val vendorRules = readVendorGenfscon(vendorSelinux)
+    val vendorVers = vendorSepolicyVers ?: readSepolicyVers(vendorSelinux)
+
     if (preflightOnly) {
         RandomAccessFile(target, "r").use { raf ->
             ImageIo(raf.channel).use { io ->
@@ -249,7 +280,8 @@ private fun run(argv: Array<String>) {
                     if (pct != last && pct % 10 == 0) {
                         print("\r    scanning " + pct + "%"); System.out.flush(); last = pct
                     }
-                }, device = device, imageName = target.name)
+                }, device = device, imageName = target.name,
+                    vendorGenfscon = vendorRules, vendorSepolicyVersion = vendorVers)
                 println("\r                    ")
                 println(result)
                 exitProcess(if (result.willLikelyBoot) 0 else 1)
@@ -286,8 +318,8 @@ private fun run(argv: Array<String>) {
                         }
                         f.readBytes()
                     },
-                    readVendorGenfscon(vendorSelinux),
-                    vendorSepolicyVers ?: readSepolicyVers(vendorSelinux)
+                    vendorRules,
+                    vendorVers
                 ),
                 keyFile?.readBytes(),
                 progress
@@ -305,7 +337,10 @@ private fun run(argv: Array<String>) {
     RandomAccessFile(target, "r").use { raf ->
         ImageIo(raf.channel).use { io ->
             println(
-                Preflight.check(io, release, patch, device = device, imageName = target.name)
+                Preflight.check(
+                    io, release, patch, device = device, imageName = target.name,
+                    vendorGenfscon = vendorRules, vendorSepolicyVersion = vendorVers
+                )
                     .toString().prependIndent("    ")
             )
         }
