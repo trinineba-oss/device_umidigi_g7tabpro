@@ -145,13 +145,34 @@ does too.
 **app** booted under DSU on the G7 Tab Pro. That closes the gap this section
 used to warn about -- the SAF read/write path is no longer unproven.
 
-Not every GSI has worked. Some images instant-revert under DSU rather than
-booting, which is a different failure from the KeyMint splash hang and is not
-yet attributed; see [USAGE.md](USAGE.md#when-something-goes-wrong).
+**Confirmed on hardware (2026-09-12):** AxionOS 2.8, which had never booted here,
+boots once the root option removes three SELinux `genfscon` rules that conflict
+with the MediaTek vendor policy. The cause was read from the `expdb` crash
+partition; see [USAGE.md](USAGE.md#when-something-goes-wrong).
+
+### Tests
+
+`gradle :core:test` runs the unit tests: SELinux rule parsing and conflict
+detection, the length-preserving policy edit, the crash-log reader against a
+synthetic dump shaped like the real one, EROFS detection, and the ext4 group
+descriptor checksum against a real descriptor that e2fsck flagged.
+
+Two golden tests use real artifacts that do not belong in the repository, and
+are skipped unless pointed at them:
+
+| variables | what they enable |
+|---|---|
+| `GOLDEN_AXION_XZ`, `GOLDEN_VENDOR_SELINUX`, `GOLDEN_KEY` | patch stock AxionOS 2.8 VANILLA 2026-09-04 and require the exact root digest of the image confirmed booting on the tablet |
+| `GOLDEN_EXPDB` | read a real dumped `expdb` partition and require the known causes |
+
+A root digest match means every byte the hashtree covers is identical, so any
+change that alters output is caught here instead of on a device.
 
 ## Building
 
-Needs a JDK 17 and the Android SDK (`compileSdk 34`, build-tools 34.0.0).
+Needs a JDK 17, Gradle 8.x and the Android SDK (`compileSdk 34`, build-tools
+34.0.0). Ubuntu's packaged Gradle is 4.4.1 and cannot build this project; if
+`gradle` resolves to it, call a newer one by its path.
 
 ```sh
 ./make-key.sh                     # derive the AOSP AVB test key in PKCS#8 form
@@ -180,7 +201,18 @@ first, exercising exactly the code path the app uses:
 cli LineageOS-22.2-GSI.img.xz --out system.img --key testkey_rsa2048.pkcs8.der
 ```
 
-Options: `--out`, `--release 13`, `--patch 2025-09-05`, `--keep-fec`.
+Options include `--out`, `--release 13`, `--patch 2025-09-05`, `--keep-fec`,
+`--fix-init`, `--preflight` and `--swap <path>=<file>`. Pass
+`--vendor-selinux <dir>` with an extracted `/vendor/etc/selinux` to check and fix
+SELinux conflicts against a device's own policy. Run `cli` with no arguments for
+the full list.
+
+To read why boots crashed from a dumped `expdb` partition, with no image:
+
+```sh
+adb exec-out su -c "dd if=/dev/block/by-name/expdb" > expdb.bin
+cli --boot-log expdb.bin --digest <root digest from the patch report>
+```
 
 Note `avbtool verify_image` insists the file be **named after the partition**
 (`system.img`), or it fails with a misleading `FileNotFoundError`.

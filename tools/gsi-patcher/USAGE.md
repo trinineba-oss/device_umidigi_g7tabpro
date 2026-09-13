@@ -117,15 +117,26 @@ Every patch ends with one, and it is the thing to read before installing:
 
 ## Installing the patched image
 
-The output is a raw `.img`. Install it with **DSU Sideloader**, which loads it as
-a Dynamic System Update alongside your existing ROM.
+The output is a raw `.img`. Install it as a Dynamic System Update alongside your
+existing ROM, either way:
+
+- **With root:** tap **4. Install with DSU and boot it**. The app installs the
+  image it just wrote, then asks before rebooting into it. Save the image on
+  internal storage, for example in `Download`, rather than an SD card or a cloud
+  folder: it is briefly relabelled during the install so `gsid` is allowed to
+  read it, and a removable card cannot carry that label.
+- **Without root:** install the file with **DSU Sideloader**.
 
 DSU is the safe way to try a GSI:
 
 - Your real ROM is untouched. The GSI lives in `/data`.
-- A **normal reboot returns you to LineageOS 20.** You have to explicitly choose
-  to boot the DSU again.
+- A **normal reboot returns you to your normal ROM.** You have to explicitly
+  choose to boot the DSU again.
 - Nothing is wiped.
+
+If you script installs yourself with `gsi_tool install`, pass `--no-reboot`.
+Without it, `gsi_tool` reboots straight into the GSI the moment the write
+finishes, which looks exactly like the tablet restarting at random.
 
 Given this project has already had two `/data` corruption scares from flashing,
 try every image under DSU first.
@@ -154,7 +165,8 @@ Vendor is API 31 (Android 12).
 | LineageOS 20 (A13) | boots | not needed |
 | LineageOS 21 (A14) | hangs at splash | **boots** -- confirmed with an image patched by this app |
 | LineageOS 22.2 (A15) | hangs at splash | **boots** |
-| LineageOS 23.x (A16) | instant DSU revert | untested since the fix was found |
+| LineageOS 23.2 (A16) | reverted in early tests | **boots** |
+| AxionOS 2.8 (A16) | reboots with no boot animation | **boots** -- needs the root option, which removes three conflicting SELinux rules |
 | PeterGSI (A17, phh) | boots | not needed -- phh builds spoof the version themselves |
 
 ---
@@ -168,7 +180,7 @@ The app reports one clear line. The common ones:
 | `this file is only N bytes, far too small to be a GSI system image` | Wrong file -- you picked a text file, or the download is truncated. |
 | `no AVB footer in the last 64 bytes: is this a GSI system image?` | Not a GSI `system.img`. A `boot.img`, `vendor.img` or a full-ROM archive will do this. |
 | `this is an Android sparse image, not a raw one` | Run it through `simg2img` first, then patch the result. |
-| `this image uses EROFS` | Only ext4 GSIs can be patched in place. Look for an EXT4 build of the same GSI. |
+| `this image uses EROFS` | Only ext4 GSIs can be patched in place. Look for an EXT4 build of the same GSI. This is reported before anything is copied. |
 | `this zip has no payload.bin inside it` | Not an OTA package this tool recognises -- some other kind of zip. |
 | `this payload has no "system" partition` | The OTA package doesn't carry a full system image (e.g. it's a partial/firmware-only update). |
 | `...needs the previous partition to apply against` | This `payload.bin` is a delta/incremental OTA, not a full one -- it only makes sense applied on top of an existing install, which a standalone downloaded GSI isn't. |
@@ -177,23 +189,32 @@ The app reports one clear line. The common ones:
 | `this image is signed with a N-bit key but the patcher holds a M-bit one` | The GSI uses a larger signing key (RSA4096). Not currently re-signable. |
 | `patched build.prop is N bytes longer than the original` | A build whose version string changes length (a codename rather than a number). Rare; not patchable in place. |
 
-### The GSI instantly reverts to your normal ROM
+### The GSI reboots straight back to your normal ROM
 
-This is **not** the KeyMint failure. The version problem makes the device hang
-at the GSI splash, because it gets far enough to try to mount `/data`. An
-instant revert means the image was rejected *before* that point, so the version
-patch is not what is failing.
+**Tap "Why did it fail to boot?"** (needs root). It reads the MediaTek `expdb`
+partition, where the kernel log of a crashed boot survives, and looks up the
+image you last patched by its root digest, so the answer is about that image
+rather than whichever crash happens to be stored first. It names the cause and
+what to do about it.
 
-Two causes are known. Until v2 the patcher signed with the AOSP test key while
-leaving whatever public key the image already carried, so any GSI signed by its
-maintainer came out with a signature that could not verify -- silently, because
-nothing about the sizes looked wrong. crDroid and Infinity builds are likely to
-have hit this. That is fixed; the report now says when the key was replaced.
+Do not trust `/sys/fs/pstore` for this on MediaTek devices. On the G7 Tab Pro it
+re-serves one old crash forever, byte-identical after every boot and even after
+being deleted, which sent a long investigation after a failure that belonged to
+no image on the device.
 
-Separately, not all GSIs boot on this device even when correctly patched. The
-vendor is API 31, and images several Android generations newer have been seen to
-instant-revert for reasons unrelated to KeyMint. If one image reverts, try a
-known-good build (AndyYan's LineageOS 21, or 22.2) before suspecting the patch.
+A reboot with no boot animation is not necessarily an early failure. The causes
+found so far look identical from the outside:
+
+- **The SELinux policy did not compile.** The GSI labels a sysfs path that the
+  vendor already labels differently, `secilc` refuses the combined policy, and
+  init reboots in *second* stage, after `/system` has mounted. This is what
+  stopped AxionOS 2.8. Re-patch with the root option ticked: it reads this
+  device's policy and comments out exactly the conflicting rules. The pre-flight
+  report flags this before you install.
+- **The image was signed wrongly.** Until v2 the patcher signed with the AOSP
+  test key while leaving whatever public key the image already carried, so a GSI
+  signed by its maintainer came out with a signature that could not verify. That
+  is fixed, and the report says when the key was replaced.
 
 To tell a bad patch from a bad GSI, compare the patched file against a reference
 build of the same source image:
