@@ -162,8 +162,14 @@ internal object Ext4Alloc {
      * it cost a boot cycle to notice. Mirrors `ext4_group_desc_csum`: crc over
      * `[0, 0x1E)`, then resume at `0x20` for 64-byte descriptors.
      */
-    private fun groupDescCsum(fs: Ext4, group: Long, gd: ByteArray): Int {
-        val uuid = fs.ioRef.read(fs.sbOffset + 0x68, 16)
+    private fun groupDescCsum(fs: Ext4, group: Long, gd: ByteArray): Int =
+        groupDescCsum(fs.ioRef.read(fs.sbOffset + 0x68, 16), group, gd)
+
+    /**
+     * The pure form, taking the filesystem UUID directly so it can be checked
+     * against real descriptors from a real image.
+     */
+    internal fun groupDescCsum(uuid: ByteArray, group: Long, gd: ByteArray): Int {
         var crc = crc16(0xFFFF, uuid, uuid.size)
         val g = byteArrayOf(
             (group and 0xFF).toByte(), ((group shr 8) and 0xFF).toByte(),

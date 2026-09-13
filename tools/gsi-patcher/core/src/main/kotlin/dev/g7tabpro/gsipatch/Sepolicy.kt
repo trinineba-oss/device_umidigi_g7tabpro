@@ -236,6 +236,24 @@ object Sepolicy {
     }
 
     /**
+     * Every conflict between the image's policy and [vendorRules], changing
+     * nothing. Preflight uses this to report before a patch; [apply] finds the
+     * same set and then edits.
+     */
+    fun inspect(fs: Ext4, vendorRules: List<Rule>): List<Conflict> {
+        if (vendorRules.isEmpty()) return emptyList()
+        val out = ArrayList<Conflict>()
+        val seenInodes = HashSet<Long>()
+        for (path in GSI_POLICY_PATHS) {
+            val ino = (try { fs.lookup(path) } catch (e: Exception) { null }) ?: continue
+            if (!seenInodes.add(ino)) continue
+            val text = String(fs.readFile(ino), Charsets.ISO_8859_1)
+            out.addAll(conflicts(parse(text, path), vendorRules))
+        }
+        return out
+    }
+
+    /**
      * The sepolicy version mapping a device needs, and whether the image has it.
      *
      * A vendor built against sepolicy version *N* requires the GSI to ship

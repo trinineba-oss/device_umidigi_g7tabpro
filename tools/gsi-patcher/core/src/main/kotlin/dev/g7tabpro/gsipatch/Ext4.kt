@@ -11,6 +11,24 @@ object ImageFormat {
 
     private const val SPARSE_MAGIC = 0xED26FF3AL
 
+    /** The EROFS superblock magic, at byte 1024: the same offset as ext4's. */
+    const val EROFS_MAGIC = 0xE0F5E1E2L
+
+    const val EROFS_MESSAGE =
+        "this image uses EROFS, and the patcher only handles ext4 GSIs: look for an EXT4 " +
+            "build of the same GSI"
+
+    /**
+     * Whether [head], the first bytes of an image, is EROFS.
+     *
+     * Meant for the decompressed head, before anything is written. Patching
+     * opens the filesystem only once the whole image is on the destination, so
+     * without this an EROFS GSI costs minutes and gigabytes of writes before
+     * it is refused.
+     */
+    fun looksLikeErofs(head: ByteArray): Boolean =
+        head.size >= 1028 && head.le32(1024) == EROFS_MAGIC
+
     fun requireRaw(io: ImageIo) {
         // Too small to classify; Avb reports on those with a better message.
         if (io.size < 4096) return
@@ -68,9 +86,7 @@ class Ext4(private val io: ImageIo, private val base: Long = 0L) {
                     head.le32(0) == 0xED26FF3AL ->
                         "this is an Android sparse image, not a raw one: convert it with " +
                             "simg2img first, then patch the result"
-                    sb.le32(0) == 0xE0F5E1E2L ->
-                        "this image uses EROFS, and the patcher only handles ext4 GSIs: " +
-                            "look for an EXT4 build of the same GSI"
+                    sb.le32(0) == ImageFormat.EROFS_MAGIC -> ImageFormat.EROFS_MESSAGE
                     else -> "not an ext4 filesystem (superblock magic is not 0xEF53)"
                 }
             )

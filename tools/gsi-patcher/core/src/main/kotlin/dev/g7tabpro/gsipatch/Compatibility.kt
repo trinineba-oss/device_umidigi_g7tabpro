@@ -97,22 +97,17 @@ object Compatibility {
                 "and no KeyMint errors."),
         Tested(Regex("avium", RegexOption.IGNORE_CASE), 36, true,
             "AviumUI (sdk 36) boots once patched, verified via DSU."),
-        Tested(Regex("axion", RegexOption.IGNORE_CASE), null, false,
-            "Axion reverts INSTANTLY under DSU -- 2.7 and, on current tooling, 2.8. That is a " +
-                "different failure from the splash hang: the image is rejected at or before " +
-                "load, so init never runs and the donor-init fix cannot help (confirmed -- 2.8 " +
-                "still reverts WITH Project CiRCLE's init swapped in). Not a KeyMint problem. " +
-                "Ruled out by measurement on the patched 2.8 image: the filesystem is clean " +
-                "(e2fsck -fn), the AVB footer and full sha256 hashtree verify, all three " +
-                "build.prop files read release=13, and it is the SMALLEST of the images tried " +
-                "here, so space is not it either. Also ruled out on hardware: rebuilding the " +
-                "vbmeta so the com.android.build.system.os_version property descriptor reads " +
-                "13 instead of its upstream 16 -- a single-variable change, root digest " +
-                "byte-identical -- still reverts instantly. Diagnose it from the DSU side " +
-                "instead: gsid/logcat during INSTALL (logcat does not survive the reboot, so " +
-                "a post-revert capture only ever shows the host booting), and pstore for the " +
-                "failed boot itself. The outstanding control is whether STOCK, unpatched Axion " +
-                "reverts too -- if it does, none of our patching is implicated."),
+        Tested(Regex("axion", RegexOption.IGNORE_CASE), null, true,
+            "AxionOS 2.8 BOOTS once its SELinux policy is fixed (confirmed on hardware " +
+                "2026-09-12). Three genfscon rules in system_ext_sepolicy.cil label the " +
+                "transparent-hugepage sysfs knobs as sysfs_transparent_hugepage, and this MTK " +
+                "vendor policy already labels the same paths differently. secilc refuses to " +
+                "compile the combined policy, so init fatal-reboots in second stage -- after " +
+                "/system mounts, before any boot animation -- which is why it looked like an " +
+                "instant DSU revert. Patching with this device's vendor policy (the root option " +
+                "in the app, --vendor-selinux on the CLI) comments exactly those rules out. The " +
+                "cause was read from the MediaTek expdb partition. pstore on this device " +
+                "re-serves one stale record forever and cannot be trusted for diagnosis."),
         Tested(Regex("infinity", RegexOption.IGNORE_CASE), 36, true,
             "Infinity-X 3.12 BOOTS once its /system/bin/init is replaced with one from a GSI " +
                 "that boots here (confirmed on hardware). The version patch alone is not enough: " +

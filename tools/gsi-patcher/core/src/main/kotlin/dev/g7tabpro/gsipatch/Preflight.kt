@@ -115,7 +115,11 @@ object Preflight {
         progress: (Long, Long) -> Unit = { _, _ -> },
         /** When supplied, the report opens with a device-vs-image assessment. */
         device: DeviceFacts? = null,
-        imageName: String? = null
+        imageName: String? = null,
+        /** This device's context rules. Empty means the conflict check is reported as not done. */
+        vendorGenfscon: List<Sepolicy.Rule> = emptyList(),
+        /** From the device's plat_sepolicy_vers.txt. Null means the mapping check is not done. */
+        vendorSepolicyVersion: String? = null
     ): Result {
         val findings = ArrayList<Finding>()
 
@@ -181,6 +185,55 @@ object Preflight {
             } catch (e: Exception) {
                 findings.add(Finding(Severity.INFO,
                     "could not inspect init (" + (e.message ?: e.toString()) + ")"))
+            }
+        }
+
+        // --- will the SELinux policy even compile on this device? ---------
+        //
+        // Both failures below are silent from outside: secilc exits, init
+        // cannot load a policy and fatal-reboots in second stage, after /system
+        // has mounted but before the boot animation. That looks exactly like a
+        // first-stage failure, which is how the AxionOS genfscon conflict hid
+        // for weeks. Neither needs more than the image and the vendor policy, so
+        // it is checked before a flash rather than diagnosed after one.
+        val mappingProblem = Sepolicy.mappingProblem(fs, vendorSepolicyVersion)
+        when {
+            mappingProblem != null -> findings.add(Finding(Severity.BLOCKER, mappingProblem))
+            vendorSepolicyVersion.isNullOrBlank() -> findings.add(Finding(Severity.WARNING,
+                "sepolicy version mapping NOT checked: the vendor sepolicy version could not " +
+                    "be read, and reading it needs root"))
+            else -> findings.add(Finding(Severity.INFO,
+                "ships the sepolicy mapping this vendor needs (version " +
+                    (vendorSepolicyVersion ?: "").trim() + ")"))
+        }
+        if (vendorGenfscon.isEmpty()) {
+            findings.add(Finding(Severity.WARNING,
+                "SELinux context conflicts with this vendor were NOT checked, because the " +
+                    "vendor policy could not be read (that needs root). A conflict makes init " +
+                    "reboot before the boot animation."))
+        } else {
+            val conflicts = try {
+                Sepolicy.inspect(fs, vendorGenfscon)
+            } catch (e: Exception) {
+                null
+            }
+            if (conflicts == null) {
+                findings.add(Finding(Severity.WARNING,
+                    "could not read this image's SELinux policy to check it for conflicts"))
+            } else if (conflicts.isEmpty()) {
+                findings.add(Finding(Severity.INFO,
+                    "no SELinux context conflicts with the vendor policy"))
+            } else {
+                val (fixable, manual) = conflicts.partition { it.autoFixable }
+                if (fixable.isNotEmpty()) findings.add(Finding(Severity.BLOCKER,
+                    fixable.size.toString() + " genfscon rule(s) conflict with the vendor " +
+                        "policy, so the combined policy cannot compile here: " +
+                        fixable.joinToString("; ") + ". Patching with the vendor policy " +
+                        "comments exactly these out."))
+                if (manual.isNotEmpty()) findings.add(Finding(Severity.BLOCKER,
+                    manual.size.toString() + " context rule(s) conflict and cannot be removed " +
+                        "automatically, because each covers more than one path: " +
+                        manual.joinToString("; ")))
             }
         }
 
