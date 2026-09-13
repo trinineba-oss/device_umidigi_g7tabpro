@@ -20,9 +20,11 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import dev.g7tabpro.gsipatch.BootLog
 import dev.g7tabpro.gsipatch.Compatibility
 import dev.g7tabpro.gsipatch.Compression
 import dev.g7tabpro.gsipatch.GsiPatcher
+import dev.g7tabpro.gsipatch.ImageFormat
 import dev.g7tabpro.gsipatch.ImageIo
 import dev.g7tabpro.gsipatch.InitSwap
 import dev.g7tabpro.gsipatch.Ingest
@@ -44,6 +46,9 @@ class MainActivity : Activity() {
         const val REQ_INPUT = 1
         const val REQ_OUTPUT = 2
         const val REQ_DONOR = 3
+        const val PREFS = "gsipatch"
+        /** Only for the progress bar: the partition is 128 MiB on the G7 Tab Pro. */
+        const val EXPDB_BYTES = 128L shl 20
     }
 
     private var inputUri: Uri? = null
@@ -60,6 +65,10 @@ class MainActivity : Activity() {
     private lateinit var rootBox: CheckBox
     private lateinit var shareBtn: Button
     private lateinit var donorBtn: Button
+    private lateinit var dsuBtn: Button
+    private lateinit var bootLogBtn: Button
+    /** Where the last successful patch was written, for the DSU install. */
+    private var lastOutputUri: Uri? = null
     private lateinit var device: DeviceFacts
     private lateinit var releaseField: EditText
     private lateinit var patchField: EditText
@@ -182,6 +191,23 @@ class MainActivity : Activity() {
             setOnClickListener { startPatch() }
         }
         root.addView(patchBtn)
+
+        // Root only. Closes the loop the rest of the app cannot: install what
+        // was just patched and boot it, with no DSU Sideloader and no PC.
+        dsuBtn = Button(this).apply {
+            text = "4. Install with DSU and boot it (root)"
+            isEnabled = false
+            setOnClickListener { startDsuInstall() }
+        }
+        root.addView(dsuBtn)
+
+        // Root only. Reads why a boot crashed out of the MediaTek expdb
+        // partition, looked up by the last patched image's root digest.
+        bootLogBtn = Button(this).apply {
+            text = "Why did it fail to boot? (root)"
+            setOnClickListener { startBootLog() }
+        }
+        root.addView(bootLogBtn)
 
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
@@ -322,6 +348,8 @@ class MainActivity : Activity() {
                         runOnUiThread {
                             donorBtn.text = "Optional: init from " + displayName(uri)
                             donorBtn.isEnabled = true
+            dsuBtn.isEnabled = lastOutputUri != null
+            bootLogBtn.isEnabled = true
             fixInitBox.isEnabled = true
                         }
                         appendLog(
@@ -382,6 +410,8 @@ class MainActivity : Activity() {
         inputBtn.isEnabled = false
         outputBtn.isEnabled = false
         donorBtn.isEnabled = false
+        dsuBtn.isEnabled = false
+        bootLogBtn.isEnabled = false
         progress.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Foreground priority for the whole run: KEEP_SCREEN_ON only protects
@@ -465,6 +495,8 @@ class MainActivity : Activity() {
                 }
                 appendLog("")
                 appendLog("== pre-flight on " + displayName(inUri))
+                val vendorPolicy = VendorPolicy.read(rootBox.isChecked)
+                appendLog("   " + vendorPolicy.note)
                 val pfd = contentResolver.openFileDescriptor(inUri, "r")
                     ?: throw IllegalStateException("cannot read that location directly")
                 pfd.use {
@@ -474,7 +506,8 @@ class MainActivity : Activity() {
                             Preflight.check(
                                 io, release, patch,
                                 { d, t -> updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt()) },
-                                device, displayName(inUri)
+                                device, displayName(inUri),
+                                vendorPolicy.rules, vendorPolicy.sepolicyVersion
                             ).toString()
                         )
                     }
@@ -570,6 +603,15 @@ class MainActivity : Activity() {
             val open: () -> java.io.InputStream = unwrapped?.let { f -> ({ f.inputStream() }) }
                 ?: { contentResolver.openInputStream(inUri) ?: throw IllegalStateException("cannot open the selected GSI for reading") }
 
+            // Refuse EROFS before the copy rather than after it. The filesystem
+            // is only opened once the whole image is on the destination, so an
+            // EROFS GSI would otherwise cost minutes and gigabytes of writes.
+            open().use { probeIn ->
+                if (ImageFormat.looksLikeErofs(readHeadBytes(Compression.open(probeIn).stream, 1028))) {
+                    throw IllegalArgumentException(ImageFormat.EROFS_MESSAGE)
+                }
+            }
+
             open().use { rawIn ->
                 // Detected from the header, not the filename: a 7z container
                 // (one this app didn't already unwrap above -- e.g. one that
@@ -661,6 +703,13 @@ class MainActivity : Activity() {
                 )
                 appendLog("")
                 appendLog(report.toString())
+                // Remembered so the crash-log reader can answer about THIS image
+                // by its root digest, even after the app has been closed.
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString("last_digest", report.newRootDigest)
+                    .putString("last_name", displayName(outUri))
+                    .apply()
+                lastOutputUri = outUri
                 appendLog("")
                 appendLog("")
                 appendLog("== pre-flight on the finished image")
@@ -668,17 +717,131 @@ class MainActivity : Activity() {
                     Preflight.check(
                         io, release, patch,
                         { d, t -> updateProgress(if (t == 0L) 100 else ((d * 100) / t).toInt()) },
-                        device, displayName(outUri)
+                        device, displayName(outUri),
+                        vendorPolicy.rules, vendorPolicy.sepolicyVersion
                     ).toString()
                 )
                 appendLog("")
-                appendLog("Install with DSU Sideloader, then check:")
-                appendLog("  getprop sys.boot_completed   -> 1")
-                appendLog("  logcat | grep generateKey    -> -67, not -64")
+                appendLog(
+                    "Next: install it with the DSU button below (root) or DSU Sideloader. If it " +
+                        "reboots without a boot animation, come back and tap \"Why did it fail to boot?\"."
+                )
             }
             readPfd.close()
             writePfd.close()
         }
+    }
+
+    /** Disables every action while one runs. Call on the UI thread. */
+    private fun markBusy() {
+        patchBtn.isEnabled = false
+        checkBtn.isEnabled = false
+        inputBtn.isEnabled = false
+        outputBtn.isEnabled = false
+        donorBtn.isEnabled = false
+        dsuBtn.isEnabled = false
+        bootLogBtn.isEnabled = false
+        progress.visibility = View.VISIBLE
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    /**
+     * Installs the image the last patch produced, then asks before rebooting.
+     *
+     * Root is checked here rather than assumed: this is the one flow in the app
+     * with no unprivileged fallback.
+     */
+    private fun startDsuInstall() {
+        if (working) return
+        val outUri = lastOutputUri ?: return
+        working = true
+        markBusy()
+        PatchService.start(this, "Installing " + displayName(outUri) + " as a DSU")
+        Thread {
+            try {
+                if (!Root.available()) throw IllegalStateException(
+                    "root is not available, so the app cannot install a DSU itself -- use DSU Sideloader"
+                )
+                val path = DsuInstaller.rootPathFor(this, outUri) ?: throw IllegalStateException(
+                    "cannot turn where the image was saved into a path root can use. Save it on " +
+                        "internal storage, for example in Download, rather than an SD card or cloud folder."
+                )
+                val size = sizeOf(outUri)
+                if (size <= 0) throw IllegalStateException("cannot determine the image size")
+                val need = size + DsuInstaller.USERDATA_BYTES
+                val free = DsuInstaller.freeBytesOnData(this)
+                if (free in 1 until need) throw IllegalStateException(
+                    "not enough free space on /data: about " + (need shr 20) + " MB needed, " +
+                        (free shr 20) + " MB free"
+                )
+                appendLog("")
+                appendLog("== installing " + displayName(outUri) + " as a DSU (" + fmt(size) + ")")
+                val result = DsuInstaller.install(path, size, { updateProgress(it) }, { appendLog("   " + it) })
+                if (!result.ok) throw IllegalStateException("the install did not complete; gsi_tool's output is above")
+                appendLog("   installed")
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("Installed")
+                        .setMessage(
+                            "Reboot into " + displayName(outUri) + " now? If it fails to boot, the " +
+                                "tablet falls back to this system on its own."
+                        )
+                        .setPositiveButton("Reboot now") { _, _ -> Thread { DsuInstaller.bootIntoGsi() }.start() }
+                        .setNegativeButton("Not now") { _, _ ->
+                            appendLog("   left installed but not armed. When ready: gsi_tool enable --single-boot, then reboot")
+                        }
+                        .show()
+                }
+            } catch (t: Throwable) {
+                appendLog("FAILED: " + (t.message ?: t.toString()))
+            } finally {
+                resetControls()
+            }
+        }.start()
+    }
+
+    /**
+     * Reads why a GSI boot crashed, out of the MediaTek expdb partition.
+     *
+     * Looks the last patched image up by its root digest, so the answer is
+     * about that image rather than whichever crash is stored first. See
+     * [BootLog] for why expdb and not pstore.
+     */
+    private fun startBootLog() {
+        if (working) return
+        working = true
+        markBusy()
+        Thread {
+            try {
+                if (!Root.available()) throw IllegalStateException(
+                    "reading the crash log needs root: the partition is not readable by apps"
+                )
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                val digest = prefs.getString("last_digest", null)
+                val name = prefs.getString("last_name", null)
+                appendLog("")
+                appendLog("== why did it fail to boot?" + (name?.let { " (" + it + ")" } ?: ""))
+                val proc = Root.exec("dd if=" + BootLog.EXPDB_PATH + " bs=1M 2>/dev/null")
+                    ?: throw IllegalStateException("could not start su")
+                val attempts = proc.inputStream.buffered().use { stream ->
+                    BootLog.scan(stream) { read ->
+                        updateProgress(((read * 100) / EXPDB_BYTES).toInt().coerceAtMost(100))
+                    }
+                }
+                proc.waitFor()
+                if (attempts.isEmpty() && digest == null) {
+                    appendLog("   no GSI crash records found. expdb is MediaTek-specific, so other devices will not have one.")
+                } else {
+                    if (digest == null) appendLog("   no patched image on record yet, so listing every recorded crash")
+                    BootLog.report(attempts, digest).lineSequence().forEach { appendLog("   " + it) }
+                }
+            } catch (t: Throwable) {
+                appendLog("FAILED: " + (t.message ?: t.toString()))
+            } finally {
+                resetControls()
+            }
+        }.start()
     }
 
     // -------------------------------------------------------------------- ui

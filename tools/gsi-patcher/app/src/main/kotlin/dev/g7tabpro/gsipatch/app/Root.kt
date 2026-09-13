@@ -52,6 +52,26 @@ object Root {
      * stderr is deliberately not merged: `su` implementations write notices
      * there that would otherwise be parsed as file content.
      */
+    /**
+     * Starts one root command and hands back the process, for output too large
+     * or too slow to collect into a String: a 128 MB partition read, or an
+     * install that runs for minutes and reports progress as it goes. Null if su
+     * cannot be started at all.
+     *
+     * The caller owns the process and must drain its stream, then waitFor().
+     * Merge stderr only for text: dd writes its summary there, which would
+     * otherwise land in the middle of binary output.
+     */
+    fun exec(script: String, mergeStderr: Boolean = false): Process? = try {
+        ProcessBuilder(listOf("su", "-c", script))
+            .redirectErrorStream(mergeStderr)
+            .start()
+    } catch (e: Exception) {
+        null
+    } catch (e: Error) {
+        null
+    }
+
     fun run(cmd: List<String>): String? = try {
         val proc = ProcessBuilder(listOf("su", "-c", cmd.joinToString(" ")))
             .redirectErrorStream(false)
