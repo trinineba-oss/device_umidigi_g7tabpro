@@ -120,11 +120,17 @@ Every patch ends with one, and it is the thing to read before installing:
 The output is a raw `.img`. Install it as a Dynamic System Update alongside your
 existing ROM, either way:
 
-- **With root:** tap **4. Install with DSU and boot it**. The app installs the
-  image it just wrote, then asks before rebooting into it. Save the image on
-  internal storage, for example in `Download`, rather than an SD card or a cloud
-  folder: it is briefly relabelled during the install so `gsid` is allowed to
-  read it, and a removable card cannot carry that label.
+- **With root:** tap **4. Install ... with DSU**. The button names the image it
+  will use. It remembers the last image it patched across restarts, so patching
+  today and installing tomorrow works; if there is nothing on record it opens a
+  file picker instead, which is also how you install an image you patched
+  elsewhere or one that needs no patch at all.
+
+  The app then asks before rebooting into it. Save the image on internal
+  storage, for example in `Download`, rather than an SD card or a cloud folder:
+  it is briefly relabelled during the install so `gsid` is allowed to read it,
+  and a removable card cannot carry that label. The app says so at the moment
+  you choose the save location, not after the patch.
 - **Without root:** install the file with **DSU Sideloader**.
 
 DSU is the safe way to try a GSI:

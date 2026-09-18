@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -20,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import dev.g7tabpro.gsipatch.Avb
 import dev.g7tabpro.gsipatch.BootLog
 import dev.g7tabpro.gsipatch.Compatibility
 import dev.g7tabpro.gsipatch.Compression
@@ -46,7 +48,12 @@ class MainActivity : Activity() {
         const val REQ_INPUT = 1
         const val REQ_OUTPUT = 2
         const val REQ_DONOR = 3
+        /** Installing an image this session did not patch -- see [startDsuInstall]. */
+        const val REQ_DSU_IMAGE = 4
         const val PREFS = "gsipatch"
+        const val PREF_DIGEST = "last_digest"
+        const val PREF_NAME = "last_name"
+        const val PREF_URI = "last_uri"
         /** Only for the progress bar: the partition is 128 MiB on the G7 Tab Pro. */
         const val EXPDB_BYTES = 128L shl 20
     }
@@ -64,15 +71,28 @@ class MainActivity : Activity() {
     private lateinit var fixInitBox: CheckBox
     private lateinit var rootBox: CheckBox
     private lateinit var shareBtn: Button
+    private lateinit var clearBtn: Button
     private lateinit var donorBtn: Button
     private lateinit var dsuBtn: Button
     private lateinit var bootLogBtn: Button
-    /** Where the last successful patch was written, for the DSU install. */
+    /**
+     * Where the last successful patch was written, for the DSU install.
+     *
+     * Persisted, not just held in memory: patching a multi-gigabyte image and
+     * installing it are separate sittings, and the app being closed in between
+     * is the normal case rather than the exception.
+     */
     private var lastOutputUri: Uri? = null
+    /** Cached so the button label costs no resolver query on the UI thread. */
+    private var lastOutputName: String? = null
     private lateinit var device: DeviceFacts
     private lateinit var releaseField: EditText
     private lateinit var patchField: EditText
     private lateinit var progress: ProgressBar
+    private lateinit var progressLabel: TextView
+    private lateinit var progressBox: LinearLayout
+    private lateinit var statusLine: TextView
+    private lateinit var logScroll: ScrollView
     private lateinit var log: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -80,33 +100,57 @@ class MainActivity : Activity() {
 
         device = DeviceProbe.read(Root.knownAvailable())
 
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val root = LinearLayout(this).apply {
+        val pad = dp(16)
+
+        // Three bands, not one long scroll. The whole screen used to be a
+        // single ScrollView, so a few hundred lines of log pushed every button
+        // off the bottom -- and the buttons that matter most, the DSU install
+        // and the crash reader, are exactly the ones you reach for *after* a
+        // wall of output. Controls scroll in their own band, the progress bar
+        // is pinned where it stays visible, and the log keeps its own space.
+        val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+            setPadding(pad, pad, pad, dp(8))
+            // Takes first focus itself so the release EditText does not, which
+            // otherwise opened the keyboard over the controls on every launch.
+            isFocusableInTouchMode = true
+            descendantFocusability = android.view.ViewGroup.FOCUS_BEFORE_DESCENDANTS
         }
 
-        root.addView(TextView(this).apply {
+        column.addView(TextView(this).apply {
             text = "Rewrites a GSI's reported Android version so a TrustKernel " +
                 "TEE provisioned under an older release will still configure KeyMint, " +
                 "then rebuilds and re-signs the dm-verity hashtree."
-            setPadding(0, 0, 0, pad)
+            setPadding(0, 0, 0, dp(12))
         })
 
-        inputBtn = Button(this).apply {
-            text = "1. Choose GSI (.img, .img.gz or .img.xz)"
-            setOnClickListener { pickInput() }
+        // What the TEE expects, kept on screen rather than scrolled away in
+        // the log: the release typed into the field below is a guess unless
+        // the number this device actually asks for is visible next to it.
+        statusLine = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 11f
+            setTextColor(themeColor(android.R.attr.textColorSecondary, Color.GRAY))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setBackgroundColor(tint(0x14))
         }
-        root.addView(inputBtn)
+        column.addView(statusLine)
+        refreshStatusLine()
 
-        outputBtn = Button(this).apply {
-            text = "2. Choose where to save"
-            isEnabled = false
-            setOnClickListener { pickOutput() }
+        column.addView(sectionHeader("Patch"))
+
+        inputBtn = button("1. Choose GSI (.img, .img.gz or .img.xz)") { pickInput() }
+        column.addView(inputBtn)
+
+        outputBtn = button("2. Choose where to save") { pickOutput() }
+        outputBtn.isEnabled = false
+        column.addView(outputBtn)
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
         }
-        root.addView(outputBtn)
-
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(TextView(this).apply { text = "Report release " })
         releaseField = EditText(this).apply {
             // ro.keymaster.*.release is the version the bootloader handed the
@@ -114,26 +158,29 @@ class MainActivity : Activity() {
             // over Build.VERSION.RELEASE also stays correct when the app is run
             // from inside a booted GSI.
             setText(Compatibility.recommendedTargetRelease(device) ?: "13")
-            minWidth = (64 * resources.displayMetrics.density).toInt()
+            minWidth = dp(64)
         }
         row.addView(releaseField)
         row.addView(TextView(this).apply { text = "  patch " })
         patchField = EditText(this).apply { setText("2025-09-05") }
         row.addView(patchField)
-        root.addView(row)
+        column.addView(row)
 
-        checkBtn = Button(this).apply {
-            text = "Check an image (no changes)"
-            isEnabled = false
-            setOnClickListener { startCheck() }
-        }
-        root.addView(checkBtn)
+        checkBtn = button("Check an image (no changes)") { startCheck() }
+        checkBtn.isEnabled = false
+        column.addView(checkBtn)
+
+        patchBtn = button("3. Patch") { startPatch() }
+        patchBtn.isEnabled = false
+        column.addView(patchBtn)
+
+        column.addView(sectionHeader("Options"))
 
         adbBox = CheckBox(this).apply {
             text = "Keep adb usable if it fails to boot (turns off adb auth)"
             isChecked = false
         }
-        root.addView(adbBox)
+        column.addView(adbBox)
 
         // Default ON. It is a no-op on images whose init has no spoof table
         // (reported, not an error), and on images that do it is the fix that
@@ -143,7 +190,7 @@ class MainActivity : Activity() {
             text = "Fix init verified-boot spoofing (recommended)"
             isChecked = true
         }
-        root.addView(fixInitBox)
+        column.addView(fixInitBox)
 
         // Off by default: nothing here requires root, and an unexpected
         // superuser prompt is worse than a check that politely says it could
@@ -169,51 +216,74 @@ class MainActivity : Activity() {
                             text = "Use root to check SELinux policy conflicts"
                             appendLog("   root: not available -- policy conflicts cannot be checked")
                         }
+                        refreshStatusLine()
                     }
                 }.start()
             }
         }
-        root.addView(rootBox)
+        column.addView(rootBox)
 
         // The older, blunter form of the same fix, kept for the case where the
         // three-byte patch does not apply: replaces init wholesale, which also
         // discards the ROM's remaining spoofing. Outside the numbered flow
         // because most images never need it.
-        donorBtn = Button(this).apply {
-            text = "Optional: replace init (donor GSI or init file)"
-            setOnClickListener { pickDonor() }
+        donorBtn = button("Optional: replace init (donor GSI or init file)") {
+            if (donorUri == null) pickDonor() else offerDonorChange()
         }
-        root.addView(donorBtn)
+        column.addView(donorBtn)
 
-        patchBtn = Button(this).apply {
-            text = "3. Patch"
-            isEnabled = false
-            setOnClickListener { startPatch() }
-        }
-        root.addView(patchBtn)
+        column.addView(sectionHeader("Install and diagnose"))
+        column.addView(hint(
+            "Both need root. Without it, install the patched image with DSU Sideloader instead."
+        ))
 
         // Root only. Closes the loop the rest of the app cannot: install what
         // was just patched and boot it, with no DSU Sideloader and no PC.
-        dsuBtn = Button(this).apply {
-            text = "4. Install with DSU and boot it (root)"
-            isEnabled = false
-            setOnClickListener { startDsuInstall() }
-        }
-        root.addView(dsuBtn)
+        dsuBtn = button("4. Install with DSU and boot it (root)") { startDsuInstall() }
+        column.addView(dsuBtn)
 
         // Root only. Reads why a boot crashed out of the MediaTek expdb
         // partition, looked up by the last patched image's root digest.
-        bootLogBtn = Button(this).apply {
-            text = "Why did it fail to boot? (root)"
-            setOnClickListener { startBootLog() }
-        }
-        root.addView(bootLogBtn)
+        bootLogBtn = button("Why did it fail to boot? (root)") { startBootLog() }
+        column.addView(bootLogBtn)
 
+        val controls = ScrollView(this).apply { isFillViewport = true }
+        controls.addView(column)
+
+        // Pinned between the two scrolling bands: during a patch this is the
+        // only thing on screen that changes, so it must not be somewhere the
+        // user can scroll away from.
+        progressLabel = TextView(this).apply {
+            textSize = 12f
+            setTextColor(themeColor(android.R.attr.textColorSecondary, Color.GRAY))
+        }
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
-            visibility = View.INVISIBLE
         }
-        root.addView(progress, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        progressBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(6), pad, dp(6))
+            visibility = View.GONE
+            addView(progressLabel)
+            addView(progress, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
+
+        val logHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad, 0, dp(8), 0)
+        }
+        logHeader.addView(sectionHeader("Log").apply {
+            setPadding(0, dp(6), 0, dp(6))
+            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+        })
+        clearBtn = flatButton("Clear") { clearLog() }
+        logHeader.addView(clearBtn)
+        // The log holds the evidence that matters -- which spoof entries were
+        // patched at which addresses, the old and new root digests, what
+        // verification concluded. Until now it was trapped in a TextView.
+        shareBtn = flatButton("Share") { shareLog() }
+        logHeader.addView(shareBtn)
 
         log = TextView(this).apply {
             typeface = Typeface.MONOSPACE
@@ -223,26 +293,102 @@ class MainActivity : Activity() {
             // the dark theme's background. Every other widget is stock and
             // follows the platform theme on its own.
             setTextColor(themeColor(android.R.attr.textColorSecondary, Color.DKGRAY))
-            setPadding(0, pad, 0, 0)
+            setPadding(pad, dp(6), pad, pad)
+            // Copying one line out of a report beats sharing the whole thing
+            // when the destination is a bug tracker.
+            setTextIsSelectable(true)
         }
-        root.addView(log)
-
-        // The log holds the evidence that matters -- which spoof entries were
-        // patched at which addresses, the old and new root digests, what
-        // verification concluded. Until now it was trapped in a TextView.
-        shareBtn = Button(this).apply {
-            text = "Share log"
-            setOnClickListener { shareLog() }
+        logScroll = object : ScrollView(this) {
+            override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+                super.onMeasure(
+                    widthSpec,
+                    MeasureSpec.makeMeasureSpec(dp(300), MeasureSpec.AT_MOST)
+                )
+            }
+        }.apply {
+            setBackgroundColor(tint(0x0C))
+            addView(log)
         }
-        root.addView(shareBtn)
 
-        val scroll = ScrollView(this)
-        scroll.addView(root)
-        setContentView(scroll)
+        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        screen.addView(controls, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        screen.addView(progressBox, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        screen.addView(divider())
+        screen.addView(logHeader, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        screen.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        setContentView(screen)
 
         appendLog("device: TEE expects Android " + (device.teeRelease ?: "unknown") +
             ", vendor API " + (device.vendorApiLevel?.toString() ?: "?") +
             ", KeyMint " + (device.keymintAidlVersion?.let { "V" + it } ?: "version unreadable"))
+
+        restoreLastOutput()
+    }
+
+    // ------------------------------------------------------------ ui plumbing
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /**
+     * A translucent wash of the foreground colour, for panel backgrounds that
+     * have to read correctly in both themes. Deriving it from the text colour
+     * rather than naming a grey is what keeps it subtle on a light background
+     * and still visible on a dark one.
+     */
+    private fun tint(alpha: Int): Int =
+        (themeColor(android.R.attr.textColorPrimary, Color.GRAY) and 0xFFFFFF) or (alpha shl 24)
+
+    private fun button(label: String, onClick: () -> Unit): Button = Button(this).apply {
+        text = label
+        // These labels are sentences, not verbs. Shouting them made the long
+        // ones wrap to three lines.
+        setAllCaps(false)
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+            topMargin = dp(2)
+            bottomMargin = dp(2)
+        }
+        setOnClickListener { onClick() }
+    }
+
+    private fun flatButton(label: String, onClick: () -> Unit): Button =
+        Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            text = label
+            setAllCaps(false)
+            textSize = 13f
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(12), 0, dp(12), 0)
+            setOnClickListener { onClick() }
+        }
+
+    private fun sectionHeader(label: String): TextView = TextView(this).apply {
+        text = label.uppercase(Locale.US)
+        textSize = 12f
+        setTypeface(typeface, Typeface.BOLD)
+        letterSpacing = 0.08f
+        setTextColor(themeColor(android.R.attr.textColorSecondary, Color.GRAY))
+        setPadding(0, dp(18), 0, dp(4))
+    }
+
+    private fun hint(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        setTextColor(themeColor(android.R.attr.textColorSecondary, Color.GRAY))
+        setPadding(0, 0, 0, dp(6))
+    }
+
+    private fun divider(): View = View(this).apply {
+        setBackgroundColor(tint(0x30))
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(1))
+    }
+
+    /** The one-line summary of what the device wants and what the app can see. */
+    private fun refreshStatusLine() {
+        val root = if (Root.knownAvailable()) "root: yes" else "root: not granted"
+        statusLine.text = Build.MODEL + " (" + Build.DEVICE + ")   TEE wants Android " +
+            (device.teeRelease ?: "?") + "   vendor API " +
+            (device.vendorApiLevel?.toString() ?: "?") + "   KeyMint " +
+            (device.keymintAidlVersion?.let { "V" + it } ?: "?") + "   " + root
     }
 
     /**
@@ -275,6 +421,14 @@ class MainActivity : Activity() {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "application/octet-stream"
             putExtra(Intent.EXTRA_TITLE, base + "-osver" + releaseField.text.toString() + ".img")
+            // Without this the grant dies with the process, and the DSU button
+            // is dead the next time the app opens even though the image it
+            // would install is still sitting on disk.
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
         }
         startActivityForResult(i, REQ_OUTPUT)
     }
@@ -285,6 +439,50 @@ class MainActivity : Activity() {
             type = "*/*"
         }
         startActivityForResult(i, REQ_DONOR)
+    }
+
+    /**
+     * Lets a chosen donor be swapped or dropped.
+     *
+     * Choosing one used to be one-way: the button only ever opened the picker,
+     * so a donor selected by mistake could be changed but never removed, and
+     * the recommended three-byte fix stayed suppressed until the app was
+     * restarted.
+     */
+    private fun offerDonorChange() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Donor init")
+            .setMessage("Using init from " + (donorUri?.let { displayName(it) } ?: "?"))
+            .setPositiveButton("Choose another") { _, _ -> pickDonor() }
+            .setNegativeButton("Remove") { _, _ ->
+                donorUri = null
+                donorBtn.text = "Optional: replace init (donor GSI or init file)"
+                fixInitBox.text = "Fix init verified-boot spoofing (recommended)"
+                fixInitBox.isEnabled = true
+                appendLog("donor removed -- the three-byte init fix applies again")
+            }
+            .setNeutralButton("Keep", null)
+            .show()
+    }
+
+    /**
+     * Picks an image to install that this session did not patch.
+     *
+     * The DSU button used to install only what the app had just produced, so
+     * an image patched yesterday -- or one that needs no patch at all, like
+     * the andyyan or PeterCai builds -- could not be installed from here even
+     * though every other part of the flow would have worked.
+     */
+    private fun pickDsuImage() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        startActivityForResult(i, REQ_DSU_IMAGE)
     }
 
     /**
@@ -329,9 +527,21 @@ class MainActivity : Activity() {
                 appendLog("input: " + displayName(uri) + "  (" + fmt(sizeOf(uri)) + ")")
             }
             REQ_OUTPUT -> {
+                persist(uri, data.flags)
                 outputUri = uri
                 outputBtn.text = "2. Save as: " + displayName(uri)
                 patchBtn.isEnabled = true
+                // Said now, while it is still one tap to choose somewhere else.
+                // Finding out after a fifteen-minute patch that the image landed
+                // on an SD card gsid cannot be pointed at is the worst moment
+                // for this to surface.
+                if (DsuInstaller.rootPathFor(this, uri) == null) {
+                    appendLog(
+                        "note: the DSU button cannot install from there (only primary internal " +
+                            "storage, e.g. Download). Patching works; installing would need " +
+                            "DSU Sideloader."
+                    )
+                }
             }
             REQ_DONOR -> {
                 // Resolve and validate now, not at patch time: extracting from a
@@ -339,33 +549,162 @@ class MainActivity : Activity() {
                 // should be rejected while the user is still looking at the
                 // picker rather than halfway through a patch.
                 donorBtn.isEnabled = false
-        fixInitBox.isEnabled = false
+                fixInitBox.isEnabled = false
                 Thread {
                     try {
                         val donor = resolveDonor(uri)
                         InitSwap.validate(donor)
                         donorUri = uri
-                        runOnUiThread {
-                            donorBtn.text = "Optional: init from " + displayName(uri)
-                            donorBtn.isEnabled = true
-            dsuBtn.isEnabled = lastOutputUri != null
-            bootLogBtn.isEnabled = true
-            fixInitBox.isEnabled = true
-                        }
                         appendLog(
                             "donor init: " + donor.size + " bytes from " + displayName(uri)
                         )
+                        appendLog(
+                            "   a donor replaces init wholesale, so the three-byte spoof fix is " +
+                                "not applied on top of it"
+                        )
+                        runOnUiThread {
+                            donorBtn.text = "Optional: init from " + displayName(uri)
+                            donorBtn.isEnabled = true
+                            // Left off, not just greyed: with a donor selected the
+                            // checkbox has no effect (see runPatch), and a control
+                            // that silently does nothing is worse than one that
+                            // plainly says so.
+                            fixInitBox.isEnabled = false
+                            fixInitBox.text = "Fix init verified-boot spoofing (replaced by the donor)"
+                        }
                     } catch (t: Throwable) {
                         donorUri = null
+                        appendLog("donor rejected: " + (t.message ?: t.toString()))
                         runOnUiThread {
                             donorBtn.text = "Optional: replace init (donor GSI or init file)"
                             donorBtn.isEnabled = true
+                            // Restored on this path too. It used to be left
+                            // disabled forever, so one rejected donor silently
+                            // turned the recommended fix off for good.
+                            fixInitBox.isEnabled = true
                         }
-                        appendLog("donor rejected: " + (t.message ?: t.toString()))
                     }
                 }.start()
             }
+            REQ_DSU_IMAGE -> {
+                persist(uri, data.flags)
+                // The digest is read inside the install thread: it opens the
+                // image, and file I/O belongs nowhere near onActivityResult.
+                startDsuInstall(uri)
+            }
         }
+    }
+
+    /**
+     * Keeps a picker's grant alive across restarts, where the provider offers
+     * one. Best effort by design: a provider that refuses is not a reason to
+     * fail the pick, it only means the button will not survive a restart.
+     */
+    private fun persist(uri: Uri, flags: Int) {
+        val keep = flags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        if (keep == 0) return
+        trimPersistedGrants()
+        try {
+            contentResolver.takePersistableUriPermission(uri, keep)
+        } catch (e: SecurityException) {
+            // Not persistable. The in-memory reference still works this session.
+        }
+    }
+
+    /**
+     * Drops the oldest persisted grants so taking a new one keeps working.
+     *
+     * The platform caps how many an app may hold, and every output location
+     * ever chosen takes one. Without this the app would quietly stop being
+     * able to remember new images after enough runs -- a failure that would
+     * only show up for the people who use it most.
+     */
+    private fun trimPersistedGrants(keepNewest: Int = 8) {
+        val held = try {
+            contentResolver.persistedUriPermissions
+        } catch (e: Exception) {
+            return
+        }
+        if (held.size < keepNewest) return
+        held.sortedBy { it.persistedTime }
+            .take(held.size - keepNewest + 1)
+            .forEach {
+                val mode =
+                    (if (it.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+                        (if (it.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+                try {
+                    contentResolver.releasePersistableUriPermission(it.uri, mode)
+                } catch (e: Exception) {
+                    // Already gone; nothing to release.
+                }
+            }
+    }
+
+    /**
+     * The AVB root digest of an image, or null if it has no readable footer.
+     *
+     * Cheap on purpose: this reads the footer and the vbmeta block, not the
+     * hashtree, so it costs a couple of reads even on a four-gigabyte image.
+     * It is what lets [startBootLog] answer about the image that was actually
+     * installed rather than about whichever one was patched last.
+     */
+    private fun digestOf(uri: Uri): String? = try {
+        contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            ImageIo(FileInputStream(pfd.fileDescriptor).channel).use { io ->
+                Avb(io).rootDigest.joinToString("") { b -> "%02x".format(b) }
+            }
+        }
+    } catch (t: Throwable) {
+        null
+    }
+
+    /**
+     * Records which image the DSU button and the crash reader are about.
+     *
+     * Call off the UI thread: [displayName] queries the content provider.
+     */
+    private fun rememberOutput(uri: Uri, digest: String?) {
+        val name = displayName(uri)
+        lastOutputUri = uri
+        lastOutputName = name
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString(PREF_DIGEST, digest)
+            .putString(PREF_NAME, name)
+            .putString(PREF_URI, uri.toString())
+            .apply()
+    }
+
+    /**
+     * Brings back the image a previous run patched, so the DSU button works in
+     * a fresh session. Verified rather than trusted: the file may have been
+     * moved, deleted or flashed and removed since, and offering to install a
+     * URI that no longer resolves is worse than offering nothing.
+     */
+    private fun restoreLastOutput() {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_URI, null) ?: return
+        Thread {
+            val uri = try { Uri.parse(saved) } catch (e: Exception) { null }
+            val size = if (uri == null) -1L else try { sizeOf(uri) } catch (e: Exception) { -1L }
+            val name = if (uri != null && size > 0) displayName(uri) else null
+            runOnUiThread {
+                if (uri != null && name != null) {
+                    lastOutputUri = uri
+                    lastOutputName = name
+                    appendLog("ready to install: " + name + "  (" + fmt(size) + ")")
+                } else {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_URI).apply()
+                }
+                refreshDsuButton()
+            }
+        }.start()
+    }
+
+    /** The DSU button always works; the label says which image it will use. */
+    private fun refreshDsuButton() {
+        val name = if (lastOutputUri == null) null else lastOutputName
+        dsuBtn.text = if (name == null) "4. Install an image with DSU and boot it (root)"
+            else "4. Install " + name + " with DSU (root)"
     }
 
     private fun displayName(uri: Uri): String {
@@ -405,15 +744,7 @@ class MainActivity : Activity() {
     private fun startPatch() {
         if (working) return
         working = true
-        patchBtn.isEnabled = false
-        checkBtn.isEnabled = false
-        inputBtn.isEnabled = false
-        outputBtn.isEnabled = false
-        donorBtn.isEnabled = false
-        dsuBtn.isEnabled = false
-        bootLogBtn.isEnabled = false
-        progress.visibility = View.VISIBLE
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        markBusy("Patching " + (inputUri?.let { displayName(it) } ?: "image"))
         // Foreground priority for the whole run: KEEP_SCREEN_ON only protects
         // this while the activity is visible, and a process killed midway
         // leaves a truncated image that still looks like a complete file.
@@ -460,10 +791,7 @@ class MainActivity : Activity() {
         val release = releaseField.text.toString().trim()
         val patch = patchField.text.toString().trim()
         working = true
-        checkBtn.isEnabled = false
-        patchBtn.isEnabled = false
-        progress.visibility = View.VISIBLE
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        markBusy("Checking " + displayName(inUri))
         PatchService.start(this, "Checking " + displayName(inUri))
 
         Thread {
@@ -704,12 +1032,10 @@ class MainActivity : Activity() {
                 appendLog("")
                 appendLog(report.toString())
                 // Remembered so the crash-log reader can answer about THIS image
-                // by its root digest, even after the app has been closed.
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putString("last_digest", report.newRootDigest)
-                    .putString("last_name", displayName(outUri))
-                    .apply()
-                lastOutputUri = outUri
+                // by its root digest, and so the DSU button still knows what to
+                // install after the app has been closed and reopened.
+                rememberOutput(outUri, report.newRootDigest)
+                runOnUiThread { refreshDsuButton() }
                 appendLog("")
                 appendLog("")
                 appendLog("== pre-flight on the finished image")
@@ -733,7 +1059,7 @@ class MainActivity : Activity() {
     }
 
     /** Disables every action while one runs. Call on the UI thread. */
-    private fun markBusy() {
+    private fun markBusy(what: String) {
         patchBtn.isEnabled = false
         checkBtn.isEnabled = false
         inputBtn.isEnabled = false
@@ -741,7 +1067,9 @@ class MainActivity : Activity() {
         donorBtn.isEnabled = false
         dsuBtn.isEnabled = false
         bootLogBtn.isEnabled = false
-        progress.visibility = View.VISIBLE
+        progressLabel.text = what
+        progress.progress = 0
+        progressBox.visibility = View.VISIBLE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
@@ -751,11 +1079,13 @@ class MainActivity : Activity() {
      * Root is checked here rather than assumed: this is the one flow in the app
      * with no unprivileged fallback.
      */
-    private fun startDsuInstall() {
+    private fun startDsuInstall(image: Uri? = null) {
         if (working) return
-        val outUri = lastOutputUri ?: return
+        // No image on record is not a dead end -- it is a question. The button
+        // used to do nothing at all in this state, which read as broken.
+        val outUri = image ?: lastOutputUri ?: run { pickDsuImage(); return }
         working = true
-        markBusy()
+        markBusy("Installing " + displayName(outUri) + " as a DSU")
         PatchService.start(this, "Installing " + displayName(outUri) + " as a DSU")
         Thread {
             try {
@@ -768,6 +1098,10 @@ class MainActivity : Activity() {
                 )
                 val size = sizeOf(outUri)
                 if (size <= 0) throw IllegalStateException("cannot determine the image size")
+                // Recorded before the install, not after: if this one crashes
+                // the tablet, the crash reader has to already know which digest
+                // to look for in expdb.
+                rememberOutput(outUri, digestOf(outUri))
                 val need = size + DsuInstaller.USERDATA_BYTES
                 val free = DsuInstaller.freeBytesOnData(this)
                 if (free in 1 until need) throw IllegalStateException(
@@ -811,7 +1145,8 @@ class MainActivity : Activity() {
     private fun startBootLog() {
         if (working) return
         working = true
-        markBusy()
+        markBusy("Reading the crash log from expdb")
+        PatchService.start(this, "Reading the crash log")
         Thread {
             try {
                 if (!Root.available()) throw IllegalStateException(
@@ -855,7 +1190,16 @@ class MainActivity : Activity() {
             inputBtn.isEnabled = true
             outputBtn.isEnabled = true
             donorBtn.isEnabled = true
-            progress.visibility = View.INVISIBLE
+            // These two were the bug: markBusy() disabled them at the start of
+            // every run and nothing here put them back, so the DSU button was
+            // permanently greyed out from the moment the first patch finished
+            // -- precisely when it becomes useful.
+            dsuBtn.isEnabled = true
+            bootLogBtn.isEnabled = true
+            // Only meaningful without a donor; the donor branch owns it otherwise.
+            fixInitBox.isEnabled = donorUri == null
+            refreshDsuButton()
+            progressBox.visibility = View.GONE
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
@@ -909,7 +1253,24 @@ class MainActivity : Activity() {
         runOnUiThread { progress.progress = pct }
     }
 
+    /**
+     * Empties the log. Worth a button because a second run's report is hard to
+     * find under a first run's, and these reports are hundreds of lines.
+     */
+    private fun clearLog() {
+        log.text = ""
+        appendLog("device: TEE expects Android " + (device.teeRelease ?: "unknown") +
+            ", vendor API " + (device.vendorApiLevel?.toString() ?: "?") +
+            ", KeyMint " + (device.keymintAidlVersion?.let { "V" + it } ?: "version unreadable"))
+    }
+
     private fun appendLog(line: String) {
-        runOnUiThread { log.append(line + "\n") }
+        runOnUiThread {
+            log.append(line + "\n")
+            // Posted, not called directly: the ScrollView has not laid the new
+            // line out yet at this point, so scrolling now stops one line short
+            // every time.
+            logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+        }
     }
 }
