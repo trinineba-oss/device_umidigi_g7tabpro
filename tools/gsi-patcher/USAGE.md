@@ -144,6 +144,43 @@ If you script installs yourself with `gsi_tool install`, pass `--no-reboot`.
 Without it, `gsi_tool` reboots straight into the GSI the moment the write
 finishes, which looks exactly like the tablet restarting at random.
 
+**`--no-reboot` suppresses the reboot, not the arming.** A finished install
+leaves `one_shot_boot=1` and `gsi_tool status` reporting `enabled`, so the next
+reboot for *any* reason starts the GSI rather than your own system. Measured on
+the G7 Tab Pro: an install that was never rebooted into still showed
+`installed / enabled` an hour later. The app's **Not now** button therefore runs
+`gsi_tool disable` explicitly, so declining the reboot actually declines it.
+
+### Removing the DSU
+
+An installed DSU stays in `/data` at the size of the image plus its 2 GiB
+userdata -- around 5.2 GB for a typical GSI -- and coming back to your own
+system does not remove it.
+
+Tap **Remove the installed DSU**. The line under the button shows the current
+state, refreshed each time the app comes forward:
+
+- `No DSU installed.`
+- `A DSU is installed (5.22 GB) and ARMED -- the next reboot will start it.`
+- `A DSU is installed (5.22 GB), not armed.`
+- `You are running inside the DSU right now.`
+
+If it is armed, the confirmation also offers **Only disarm**, which keeps the
+image but takes it out of the boot path. Removing is irreversible in the sense
+that reinstalling means writing the whole image again, a few minutes.
+
+You cannot remove a DSU from inside it -- gsid will not delete the system it is
+running from. Reboot to your own system first; the app says so rather than
+letting `gsi_tool` fail with a message about live images.
+
+The equivalent by hand:
+
+```sh
+gsi_tool status     # normal | installed | running, plus enabled/disabled
+gsi_tool disable    # keep it, but stop it taking the next reboot
+gsi_tool wipe       # delete it and free the space
+```
+
 Given this project has already had two `/data` corruption scares from flashing,
 try every image under DSU first.
 

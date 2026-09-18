@@ -74,7 +74,16 @@ class MainActivity : Activity() {
     private lateinit var clearBtn: Button
     private lateinit var donorBtn: Button
     private lateinit var dsuBtn: Button
+    private lateinit var wipeBtn: Button
     private lateinit var bootLogBtn: Button
+    private lateinit var dsuStateLine: TextView
+    /**
+     * Newest DSU probe wins. Several can be in flight -- one from a finishing
+     * install, one from resetControls, one from onResume -- and without this
+     * a slow early probe can land last and leave the button in the state that
+     * was true a second ago.
+     */
+    private val dsuProbe = java.util.concurrent.atomic.AtomicInteger(0)
     /**
      * Where the last successful patch was written, for the DSU install.
      *
@@ -242,6 +251,16 @@ class MainActivity : Activity() {
         dsuBtn = button("4. Install with DSU and boot it (root)") { startDsuInstall() }
         column.addView(dsuBtn)
 
+        // An installed DSU sits in /data at the size of the image plus its 2 GiB
+        // userdata, and until now the app could only remove one as a side
+        // effect of installing the next. Coming back from a DSU with no way to
+        // reclaim five gigabytes was the gap.
+        wipeBtn = button("Remove the installed DSU (root)") { confirmWipe() }
+        column.addView(wipeBtn)
+
+        dsuStateLine = hint("")
+        column.addView(dsuStateLine)
+
         // Root only. Reads why a boot crashed out of the MediaTek expdb
         // partition, looked up by the last patched image's root digest.
         bootLogBtn = button("Why did it fail to boot? (root)") { startBootLog() }
@@ -323,6 +342,16 @@ class MainActivity : Activity() {
             ", KeyMint " + (device.keymintAidlVersion?.let { "V" + it } ?: "version unreadable"))
 
         restoreLastOutput()
+    }
+
+    /**
+     * The DSU can change without the app: booted from Settings, discarded from
+     * the notification, or consumed by a reboot. Re-read it each time the app
+     * comes forward rather than trusting what was true when it was last open.
+     */
+    override fun onResume() {
+        super.onResume()
+        if (!working) refreshDsuState()
     }
 
     // ------------------------------------------------------------ ui plumbing
@@ -1066,6 +1095,7 @@ class MainActivity : Activity() {
         outputBtn.isEnabled = false
         donorBtn.isEnabled = false
         dsuBtn.isEnabled = false
+        wipeBtn.isEnabled = false
         bootLogBtn.isEnabled = false
         progressLabel.text = what
         progress.progress = 0
@@ -1113,6 +1143,7 @@ class MainActivity : Activity() {
                 val result = DsuInstaller.install(path, size, { updateProgress(it) }, { appendLog("   " + it) })
                 if (!result.ok) throw IllegalStateException("the install did not complete; gsi_tool's output is above")
                 appendLog("   installed")
+                refreshDsuState()
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     android.app.AlertDialog.Builder(this)
@@ -1123,7 +1154,21 @@ class MainActivity : Activity() {
                         )
                         .setPositiveButton("Reboot now") { _, _ -> Thread { DsuInstaller.bootIntoGsi() }.start() }
                         .setNegativeButton("Not now") { _, _ ->
-                            appendLog("   left installed but not armed. When ready: gsi_tool enable --single-boot, then reboot")
+                            // Not cosmetic. gsi_tool install arms the DSU on
+                            // its own -- --no-reboot suppresses the reboot, not
+                            // the enable -- so without this the next reboot for
+                            // any reason at all would start the GSI. Saying
+                            // "not now" has to actually disarm it.
+                            Thread {
+                                val r = DsuInstaller.disable()
+                                appendLog(
+                                    if (r.ok) "   disarmed: it stays installed, and the next reboot " +
+                                        "goes to your normal system. Arm it later by installing again."
+                                    else "   WARNING: could not disarm it (" + r.log + "). The next " +
+                                        "reboot may start the GSI; use \"Remove the installed DSU\"."
+                                )
+                                refreshDsuState()
+                            }.start()
                         }
                         .show()
                 }
@@ -1132,6 +1177,127 @@ class MainActivity : Activity() {
             } finally {
                 resetControls()
             }
+        }.start()
+    }
+
+    /**
+     * Reads the DSU state in the background and says so on screen.
+     *
+     * Only when root has already been granted: this runs on every resume, and
+     * a superuser prompt every time the app is brought to the foreground would
+     * be intolerable. Without root the line says the state is unknown rather
+     * than claiming nothing is installed.
+     */
+    private fun refreshDsuState() {
+        val id = dsuProbe.incrementAndGet()
+        if (!Root.knownAvailable()) {
+            runOnUiThread {
+                if (id != dsuProbe.get()) return@runOnUiThread
+                dsuStateLine.text = "DSU state needs root to read. The button will ask when tapped."
+                // Left tappable on purpose: tapping is how root gets asked for.
+                wipeBtn.isEnabled = !working
+            }
+            return
+        }
+        Thread {
+            val st = DsuInstaller.status()
+            runOnUiThread {
+                if (id != dsuProbe.get()) return@runOnUiThread
+                dsuStateLine.text = when {
+                    st.state == DsuInstaller.State.RUNNING ->
+                        "You are running inside the DSU right now. Reboot to your own system to remove it."
+                    st.state == DsuInstaller.State.INSTALLED && st.armed ->
+                        "A DSU is installed" + sizeSuffix(st.bytes) +
+                            " and ARMED -- the next reboot will start it, not your own system."
+                    st.state == DsuInstaller.State.INSTALLED ->
+                        "A DSU is installed" + sizeSuffix(st.bytes) + ", not armed."
+                    st.state == DsuInstaller.State.NORMAL -> "No DSU installed."
+                    else -> "DSU state could not be read."
+                }
+                wipeBtn.isEnabled = !working && st.installed
+            }
+        }.start()
+    }
+
+    private fun sizeSuffix(bytes: Long): String =
+        if (bytes <= 0) "" else " (" + fmt(bytes) + ")"
+
+    /**
+     * Asks before removing an installed DSU, and offers the gentler option.
+     *
+     * Two different wants hide behind one button: reclaiming the space, and
+     * merely stopping it taking the next reboot. Removing is irreversible --
+     * the image has to be written again, which is minutes -- so disarming is
+     * offered alongside rather than buried.
+     */
+    private fun confirmWipe() {
+        if (working) return
+        Thread {
+            if (!Root.available()) {
+                appendLog("FAILED: removing a DSU needs root")
+                refreshDsuState()
+                return@Thread
+            }
+            val st = DsuInstaller.status()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                refreshDsuState()
+                if (st.state == DsuInstaller.State.RUNNING) {
+                    appendLog(
+                        "cannot remove the DSU from inside it -- gsid will not delete the system " +
+                            "it is running from. Reboot to your own system first, then tap this again."
+                    )
+                    return@runOnUiThread
+                }
+                if (!st.installed) {
+                    appendLog("nothing to remove: no DSU is installed")
+                    return@runOnUiThread
+                }
+                val d = android.app.AlertDialog.Builder(this)
+                    .setTitle("Remove the installed DSU?")
+                    .setMessage(
+                        "This deletes the installed image and its userdata" + sizeSuffix(st.bytes) +
+                            ". Your own system is untouched. Installing it again means writing " +
+                            "the whole image over, which takes a few minutes."
+                    )
+                    .setPositiveButton("Remove") { _, _ -> startWipe() }
+                    .setNegativeButton("Cancel", null)
+                if (st.armed) {
+                    d.setNeutralButton("Only disarm") { _, _ -> startDisable() }
+                }
+                d.show()
+            }
+        }.start()
+    }
+
+    private fun startWipe() {
+        if (working) return
+        working = true
+        markBusy("Removing the installed DSU")
+        Thread {
+            try {
+                appendLog("")
+                appendLog("== removing the installed DSU")
+                val r = DsuInstaller.wipe()
+                appendLog("   " + r.log)
+                if (!r.ok) throw IllegalStateException("gsi_tool wipe did not succeed")
+                appendLog("   removed; the space under /data is free again")
+            } catch (t: Throwable) {
+                appendLog("FAILED: " + (t.message ?: t.toString()))
+            } finally {
+                resetControls()
+            }
+        }.start()
+    }
+
+    private fun startDisable() {
+        Thread {
+            val r = DsuInstaller.disable()
+            appendLog(
+                if (r.ok) "DSU disarmed -- it stays installed, but the next reboot goes to your own system"
+                else "FAILED to disarm: " + r.log
+            )
+            refreshDsuState()
         }.start()
     }
 
@@ -1196,11 +1362,16 @@ class MainActivity : Activity() {
             // -- precisely when it becomes useful.
             dsuBtn.isEnabled = true
             bootLogBtn.isEnabled = true
+            // wipeBtn is deliberately absent here: refreshDsuState below owns
+            // it, because whether there is anything to remove is a fact about
+            // the device, not about whether a run just finished.
             // Only meaningful without a donor; the donor branch owns it otherwise.
             fixInitBox.isEnabled = donorUri == null
             refreshDsuButton()
             progressBox.visibility = View.GONE
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            // After working = false, so the probe sees the finished state.
+            refreshDsuState()
         }
     }
 
