@@ -313,3 +313,84 @@ risk**, the crypto flags are already re-enabled in the tree, and TWRP builds run
 in CI. If that works, `/data` decryption is solved without touching the vendor
 partition. This patch's recovery benefit is a reason to keep it on the table,
 not a reason to accept a `/data`-risking flash before the free option is tried.
+
+---
+
+# The complete fix: five strings, both blockers (2026-09-24)
+
+The section above redirects the **two OS-version** strings in `libkeymint.so`
+(boot blocker 1). Hardware investigation on 2026-09-21 found that boot blocker 2
+— the root-of-trust rejection documented in `INIT_SWAP_FIX.md` — is **also
+vendor-side and fixable by the same technique**, in a different binary.
+
+## Where each string lives (UMIDIGI G7 Tab Pro, vendor API 31)
+
+Confirmed on-device with `grep -abo`; each occurs exactly once and is a complete
+NUL-terminated C string:
+
+| binary | offset | original | replacement | blocker |
+|---|---|---|---|---|
+| `lib64/libkeymint.so` | 34768 | `ro.build.version.release` | `ro.vendor.kmosver` | 1 |
+| `lib64/libkeymint.so` | 34793 | `ro.build.version.security_patch` | `ro.vendor.kmospatch` | 1 |
+| `bin/hw/…keymint-service.trustkernel` | 15945 | `ro.boot.verifiedbootstate` | `ro.vendor.kmvbstate` | 2 |
+| `bin/hw/…keymint-service.trustkernel` | 16237 | `ro.boot.vbmeta.digest` | `ro.vendor.kmvbdig` | 2 |
+| `bin/hw/…keymint-service.trustkernel` | 18291 | `ro.boot.vbmeta.device_state` | `ro.vendor.kmvbdevst` | 2 |
+
+The three root-of-trust strings are **not** in `libkeymint.so` — they are in the
+service executable. That is why blocker 2 stayed hidden behind the init-swap
+workaround for so long: the file nobody had opened.
+
+## Why redirecting the root-of-trust props fixes the boot (and does not forge anything)
+
+The device's bootloader publishes `verifiedbootstate=orange`,
+`vbmeta.device_state=unlocked`, and **no** vbmeta digest — confirmed live in
+`/proc/bootconfig`. A failing GSI's `init` overwrites these with
+`locked`/`green`/`<synthesised>` before KeyMint reads them, so the TA is handed a
+root of trust inconsistent with the hardware fuses and rejects it → the TA never
+loads → `/data` never mounts → splash hang.
+
+The fix defines the vendor-owned props with the values the device **actually
+has**:
+
+```
+ro.vendor.kmvbstate=orange
+ro.vendor.kmvbdevst=unlocked
+# ro.vendor.kmvbdig left undefined  -> reads empty  -> matches the absent digest
+```
+
+So KeyMint reads the honest hardware state regardless of what a GSI's init
+fabricates, the TA accepts a consistent root of trust, and the boot proceeds.
+This makes attestation report the *truthful* `unlocked`/`orange` — which
+correctly does NOT satisfy strong integrity on an unlocked bootloader. It is a
+boot fix, not an attestation bypass.
+
+## Tooling
+
+- `tools/patch-keymint-binary.py` — the in-place string redirect. Rewrites each
+  name shorter, NUL-padded, at the same offset (no relocation, ELF unchanged).
+  Refuses unless every original occurs exactly once, is NUL-terminated, the
+  replacement fits, and no replacement pre-exists; re-reads and asserts the
+  result. Presets `libkeymint` and `keymint-service` carry the five strings
+  above. `--dry-run` prints the plan without writing.
+- `tools/build-vendor-keymint-fix.sh` — the whole image build from a **stock,
+  unpatched** vendor image: patches both binaries, defines the four props in
+  `build.prop`, labels them in `vendor_property_contexts`, rebuilds the AVB
+  hashtree footer with the stock salt + partition size, and verifies the
+  finished artifact. Supersedes the older `patch-vendor-keymint-selinux.sh`
+  (which only did the SELinux labels and assumed the binary was patched
+  elsewhere).
+
+Offline validation done on the real binaries pulled from the device: originals
+gone, replacements present exactly once at the expected offsets, only the planned
+bytes changed (49 in `libkeymint.so`, 64 in the service binary), ELF headers
+intact. **Not yet tested on hardware** — the decisive test is DSU-booting an
+*unpatched* Infinity-X / crDroid / Lunaris after flashing the built vendor image;
+if one boots stock, both blockers are retired.
+
+## Labelling note
+
+All four **defined** props are labelled `vendor_mtk_default_prop` (the same type
+argued for in the version-only section: `property_type` so init may set them,
+`mtk_core_property_type` so every domain incl. `shell` can read them). The
+undefined `kmvbdig` needs no label — an undefined prop is never looked up, which
+also means it cannot re-trigger the unlabelled-prop bootloop.

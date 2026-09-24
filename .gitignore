@@ -17,3 +17,5 @@ Thumbs.db
 # Local scratch space some contributors may use
 scratch/
 *.tmp
+__pycache__/
+*.pyc
