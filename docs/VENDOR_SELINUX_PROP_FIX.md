@@ -372,20 +372,47 @@ boot fix, not an attestation bypass.
   replacement fits, and no replacement pre-exists; re-reads and asserts the
   result. Presets `libkeymint` and `keymint-service` carry the five strings
   above. `--dry-run` prints the plan without writing.
-- `tools/build-vendor-keymint-fix.sh` — the whole image build from a **stock,
-  unpatched** vendor image: patches both binaries, defines the four props in
-  `build.prop`, labels them in `vendor_property_contexts`, rebuilds the AVB
-  hashtree footer with the stock salt + partition size, and verifies the
-  finished artifact. Supersedes the older `patch-vendor-keymint-selinux.sh`
-  (which only did the SELinux labels and assumed the binary was patched
-  elsewhere).
+- `tools/build-vendor-kmfix.py` — builds **both** images from a stock vendor
+  image (with its AVB footer), with no mount and no root:
+  `vendor.img` and a matching `vbmeta_vendor.img`. Both binaries keep their
+  size, so patched bytes are written through the file's own block map; both
+  text files have zeroed slack in their last block, so the additions go there
+  and only `i_size` changes. No inode is replaced, so owner, mode, times and
+  SELinux labels are untouched. `e2fsck -fn` must pass before the footer is
+  rebuilt with the stock salt, partition size and FEC.
 
-Offline validation done on the real binaries pulled from the device: originals
-gone, replacements present exactly once at the expected offsets, only the planned
-bytes changed (49 in `libkeymint.so`, 64 in the service binary), ELF headers
-intact. **Not yet tested on hardware** — the decisive test is DSU-booting an
-*unpatched* Infinity-X / crDroid / Lunaris after flashing the built vendor image;
-if one boots stock, both blockers are retired.
+### vbmeta_vendor must be rebuilt as well
+
+fstab mounts `/vendor` with plain `avb` (no `avb_keys`), unlike `/system`
+(`avb=vbmeta_system,avb_keys=/avb/…-gsi.avbpubkey`). So the vendor hashtree
+root digest that dm-verity uses comes from **vbmeta_vendor**, not from the vendor
+image's own footer. A vendor image rebuilt on its own would still be checked
+against the stock digest in vbmeta_vendor. The builder therefore emits
+`vbmeta_vendor.img` carrying the new descriptor (signed with the AOSP test key,
+since the OEM key is not available). Flash the two together.
+
+### Build result (2026-09-24, vendor 20241121 pulled from the device)
+
+- stock root digest `505d92a5…` (matches stock vbmeta_vendor) → new `5bc92ce1…`,
+  present in both the vendor footer and the new vbmeta_vendor;
+  `avbtool verify_image` passes on vbmeta_vendor → vendor incl. full hashtree.
+- 7 of 241,744 filesystem blocks differ from stock: 1 in `libkeymint.so`, 2 in
+  the service binary, the last block of `build.prop` and of
+  `vendor_property_contexts`, and the two inode-table blocks holding those
+  files' sizes. Labels confirmed identical, incl. `hal_keymint_default_exec`.
+- Values match what the daily driver already feeds KeyMint
+  (`release=13`, `security_patch=2025-09-05`), so the current install sees no
+  change in OS version or patch level.
+
+Use a vendor image that matches the device's other partitions — pull
+`/dev/block/mapper/vendor_<slot>` from the device rather than taking it from a
+different firmware package (the 20250423 package is **not** this device's base).
+`patch-vendor-keymint-selinux.sh` is superseded: it labels only, and does not
+rebuild vbmeta_vendor.
+
+**Not yet tested on hardware.** Decisive test: flash both images, confirm the
+daily driver boots and `getprop ro.vendor.kmosver` prints `13`, then DSU-boot an
+*unpatched* Infinity-X / crDroid / Lunaris.
 
 ## Labelling note
 

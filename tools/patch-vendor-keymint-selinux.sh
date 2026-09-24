@@ -1,4 +1,6 @@
 #!/bin/bash
+# SUPERSEDED by tools/build-vendor-kmfix.py: this script only adds labels and
+# does not rebuild vbmeta_vendor, which /vendor verity is checked against.
 # Adds the SELinux property_contexts entries that let hal_keymint_default read
 # the redirected OS-version props. Without them the props fall back to
 # default_prop, which that domain cannot read -> empty version -> early_hal
