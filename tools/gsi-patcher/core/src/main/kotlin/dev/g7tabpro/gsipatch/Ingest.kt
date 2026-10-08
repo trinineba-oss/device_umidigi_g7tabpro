@@ -7,8 +7,9 @@ import org.apache.commons.compress.archivers.sevenz.SevenZFile
 
 /**
  * Reduces the containers GSIs and full ROM builds actually get distributed
- * in -- an OTA zip (`payload.bin` inside), a bare `payload.bin`, or a 7z
- * archive -- down to a plain system image, so the existing raw/gz/xz pipeline
+ * in -- an OTA zip (`payload.bin` inside), an image zip (`system.img` inside,
+ * as Google's ci.android.com GSIs ship), a bare `payload.bin`, a 7z archive,
+ * or an Android sparse image -- down to a plain system image, so the existing raw/gz/xz pipeline
  * ([Compression], [GsiPatcher]) can pick up unchanged from there without
  * knowing any of this happened.
  *
@@ -23,6 +24,8 @@ object Ingest {
     private val ZIP_MAGIC = byteArrayOf(0x50, 0x4B, 0x03, 0x04)
     private val SEVENZIP_MAGIC = byteArrayOf(0x37, 0x7A, 0xBC.toByte(), 0xAF.toByte(), 0x27, 0x1C)
     private val PAYLOAD_MAGIC = "CrAU".toByteArray(Charsets.US_ASCII)
+    /** Android sparse image magic 0xED26FF3A, little-endian. */
+    private val SPARSE_MAGIC = byteArrayOf(0x3A, 0xFF.toByte(), 0x26, 0xED.toByte())
 
     private fun peek(file: File, n: Int): ByteArray {
         RandomAccessFile(file, "r").use { raf ->
@@ -45,7 +48,8 @@ object Ingest {
      * expensive to copy twice on a phone's limited storage for nothing.
      */
     fun looksLikeContainer(head: ByteArray): Boolean =
-        head.startsWith(PAYLOAD_MAGIC) || head.startsWith(ZIP_MAGIC) || head.startsWith(SEVENZIP_MAGIC)
+        head.startsWith(PAYLOAD_MAGIC) || head.startsWith(ZIP_MAGIC) ||
+            head.startsWith(SEVENZIP_MAGIC) || head.startsWith(SPARSE_MAGIC)
 
     fun unwrap(
         input: File,
@@ -60,18 +64,13 @@ object Ingest {
                 extractPayload(input, out, partitionName, progress)
                 out
             }
-            head.startsWith(ZIP_MAGIC) -> {
-                val payloadTmp = File(workDir, "payload.bin.tmp")
-                try {
-                    extractZipEntry(input, payloadTmp)
-                    val out = File(workDir, "extracted-$partitionName.img")
-                    extractPayload(payloadTmp, out, partitionName, progress)
-                    out
-                } finally {
-                    payloadTmp.delete()
-                }
-            }
+            head.startsWith(ZIP_MAGIC) -> unwrapZip(input, workDir, partitionName, progress)
             head.startsWith(SEVENZIP_MAGIC) -> extractSevenZipFirstFile(input, workDir)
+            head.startsWith(SPARSE_MAGIC) -> {
+                val out = File(workDir, "extracted-$partitionName.img")
+                input.inputStream().buffered(1 shl 20).use { Sparse.expand(it, out) }
+                out
+            }
             else -> input
         }
     }
@@ -101,14 +100,45 @@ object Ingest {
         }
     }
 
-    private fun extractZipEntry(zipFile: File, out: File) {
+    /**
+     * Two zip layouts are in the wild. OTA packages carry `payload.bin`; image
+     * zips -- Google's own GSIs from ci.android.com (`aosp_arm64-...zip`),
+     * `fastboot update` packages -- carry `system.img` directly, often in
+     * Android sparse format. payload.bin wins if both are present.
+     */
+    private fun unwrapZip(
+        zipFile: File,
+        workDir: File,
+        partitionName: String,
+        progress: ((Long, Long) -> Unit)?
+    ): File {
         ZipFile(zipFile).use { zip ->
-            val entry = zip.entries().asSequence()
-                .firstOrNull { it.name.equals("payload.bin", ignoreCase = true) }
+            val entries = zip.entries().asSequence().filter { !it.isDirectory }.toList()
+            val payload = entries.firstOrNull { File(it.name).name.equals("payload.bin", true) }
+            if (payload != null) {
+                val payloadTmp = File(workDir, "payload.bin.tmp")
+                try {
+                    zip.getInputStream(payload).use { inp -> copy(inp, payloadTmp) }
+                    val out = File(workDir, "extracted-$partitionName.img")
+                    extractPayload(payloadTmp, out, partitionName, progress)
+                    return out
+                } finally {
+                    payloadTmp.delete()
+                }
+            }
+            val image = entries.firstOrNull { File(it.name).name.equals("$partitionName.img", true) }
                 ?: throw IllegalArgumentException(
-                    "this zip has no payload.bin inside it -- not an OTA package this tool recognises"
+                    "this zip has neither payload.bin nor $partitionName.img inside it (it has: " +
+                        entries.joinToString { File(it.name).name }.ifEmpty { "nothing" } + ")"
                 )
-            zip.getInputStream(entry).use { inp -> copy(inp, out) }
+            val out = File(workDir, "extracted-$partitionName.img")
+            zip.getInputStream(image).buffered(1 shl 20).use { inp ->
+                inp.mark(4)
+                val magic = ByteArray(4).also { b -> var n = 0; while (n < 4) { val r = inp.read(b, n, 4 - n); if (r < 0) break; n += r } }
+                inp.reset()
+                if (magic.startsWith(SPARSE_MAGIC)) Sparse.expand(inp, out) else copy(inp, out)
+            }
+            return out
         }
     }
 

@@ -113,6 +113,16 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Version in the action bar, read from the installed package so it can
+        // never drift from the build -- screenshots and bug reports then say
+        // which build produced them.
+        val version = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (e: Exception) {
+            null
+        }
+        title = getString(R.string.app_name) + (version?.let { " v$it" } ?: "")
+
         device = DeviceProbe.read(Root.knownAvailable())
 
         val pad = dp(16)
@@ -879,7 +889,7 @@ class MainActivity : Activity() {
                 val head = contentResolver.openInputStream(inUri)?.use { readHeadBytes(it, 8) } ?: ByteArray(0)
                 if (Ingest.looksLikeContainer(head)) {
                     throw IllegalArgumentException(
-                        "this is a zip/7z/payload.bin container, not a plain image; checking " +
+                        "this is a zip/7z/payload.bin/sparse container, not a plain image; checking " +
                             "reads the image directly, so patch it first and the finished image " +
                             "is checked automatically"
                     )

@@ -65,6 +65,8 @@ to an inode and stays inside its extents instead of searching the image.
 | `.img.xz` | `org.tukaani:xz`, a pure-Java LZMA2 decoder -- neither the JDK nor Android ships xz support |
 | `.7z` | [`Ingest.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Ingest.kt), via `commons-compress`; extracts the first file entry, which then goes through the row above like any other input |
 | OTA `.zip` | `Ingest.kt` finds `payload.bin` inside via `java.util.zip.ZipFile`, then extracts it as below |
+| image `.zip` (Google ci.android.com GSIs, fastboot packages) | no `payload.bin`: `Ingest.kt` takes `system.img` from the zip instead, expanding it if sparse |
+| Android sparse image | [`Sparse.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Sparse.kt) streams it to raw (`simg2img`), bare or inside a zip |
 | `payload.bin` | [`Payload.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Payload.kt) + [`Protobuf.kt`](core/src/main/kotlin/dev/g7tabpro/gsipatch/Protobuf.kt) -- see below |
 
 The format is detected from the **magic bytes, not the file extension**.
