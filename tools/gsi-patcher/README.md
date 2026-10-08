@@ -175,7 +175,7 @@ Needs a JDK 17, Gradle 8.x and the Android SDK (`compileSdk 34`, build-tools
 `gradle` resolves to it, call a newer one by its path.
 
 ```sh
-./make-key.sh                     # derive the AOSP AVB test key in PKCS#8 form
+./make-key.sh                     # derive the AOSP AVB test keys (2048/4096/8192) in PKCS#8 form
 gradle :app:assembleRelease       # -> app/build/outputs/apk/release/app-release.apk
 gradle :cli:installDist           # -> cli/build/install/cli/bin/cli
 ```
@@ -201,6 +201,9 @@ first, exercising exactly the code path the app uses:
 cli LineageOS-22.2-GSI.img.xz --out system.img --key testkey_rsa2048.pkcs8.der
 ```
 
+`--key` may be repeated; pass `--key testkey_rsa2048.pkcs8.der --key
+testkey_rsa4096.pkcs8.der` and the one matching the image's key size is used.
+
 Options include `--out`, `--release 13`, `--patch 2025-09-05`, `--keep-fec`,
 `--fix-init`, `--preflight` and `--swap <path>=<file>`. Pass
 `--vendor-selinux <dir>` with an extracted `/vendor/etc/selinux` to check and fix
@@ -219,13 +222,22 @@ Note `avbtool verify_image` insists the file be **named after the partition**
 
 ## Signing key
 
-GSIs are signed with the public AOSP AVB test key, which is why re-signing is
-possible at all; this is confirmed per-image at runtime, and an image signed with
-some other key will fail with a clear signature-size or verification error.
+The patched image is re-signed with a public AOSP AVB test key, replacing
+whatever key the maintainer used -- the device tolerates that because its
+bootloader is unlocked. The vbmeta is edited in place, so the signature and the
+embedded public key must stay the same size: **a 4096-bit image needs a 4096-bit
+key.** GSIs ship with either size, so the app carries one key per size
+(`testkey_rsa2048`, `testkey_rsa4096`, `testkey_rsa8192`) and uses the one that
+matches. `SHA256_RSA*` and `SHA512_RSA*` are both supported. Before v5.10 only the
+2048-bit key was bundled, and every 4096-bit GSI failed with *"signed with a
+4096-bit key but the patcher holds a 2048-bit one"*.
 
-The key is published upstream at `external/avb/test/data/testkey_rsa2048.pem`.
-`make-key.sh` converts it to the PKCS#8 DER that Java's `KeyFactory` requires --
-the upstream file is PKCS#1. It is generated rather than committed.
+The keys are published upstream in `external/avb/test/data/`. `make-key.sh`
+converts them to the PKCS#8 DER that Java's `KeyFactory` requires -- the upstream
+files are PKCS#1. They are generated rather than committed.
+
+`AvbKeySizeTest` round-trips each size through `avbtool verify_image`; set
+`AVBTOOL=.../avbtool.py AVB_TESTKEYS=<dir with the .pkcs8.der files>` to run it.
 
 ## Layout
 

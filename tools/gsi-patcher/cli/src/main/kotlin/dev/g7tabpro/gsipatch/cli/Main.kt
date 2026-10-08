@@ -52,7 +52,7 @@ private fun run(argv: Array<String>) {
         System.err.println(
             "usage: gsipatch <image.img|.img.gz|.img.xz> [--out patched.img]\n" +
                 "                [--release 13] [--patch 2025-09-05]\n" +
-                "                [--key key.pkcs8.der] [--keep-fec]\n" +
+                "                [--key key.pkcs8.der ...] [--keep-fec]\n" +
                 "\n" +
                 "  --out is required for compressed input; without it a raw image is\n" +
                 "  patched in place.\n" +
@@ -95,7 +95,7 @@ private fun run(argv: Array<String>) {
     var output: File? = null
     var release = "13"
     var patch = "2025-09-05"
-    var keyFile: File? = null
+    val keyFiles = ArrayList<File>()
     var dropFec = true
     var preflightOnly = false
     var enableAdb = false
@@ -117,7 +117,7 @@ private fun run(argv: Array<String>) {
             "--out" -> output = File(argv[++i])
             "--release" -> release = argv[++i]
             "--patch" -> patch = argv[++i]
-            "--key" -> keyFile = File(argv[++i])
+            "--key" -> keyFiles.add(File(argv[++i]))
             "--keep-fec" -> dropFec = false
             "--preflight" -> preflightOnly = true
             "--enable-adb" -> enableAdb = true
@@ -321,7 +321,7 @@ private fun run(argv: Array<String>) {
                     vendorRules,
                     vendorVers
                 ),
-                keyFile?.readBytes(),
+                keyFiles.map { it.readBytes() },
                 progress
             )
             println()

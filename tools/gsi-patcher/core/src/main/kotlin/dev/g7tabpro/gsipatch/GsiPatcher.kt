@@ -144,7 +144,11 @@ object GsiPatcher {
         "/system/vendor/build.prop"
     )
 
-    fun patch(io: ImageIo, options: Options, pkcs8Key: ByteArray?, progress: Progress = Silent): Report {
+    fun patch(io: ImageIo, options: Options, pkcs8Key: ByteArray?, progress: Progress = Silent): Report =
+        patch(io, options, listOfNotNull(pkcs8Key), progress)
+
+    /** As above, with one signing key per RSA size; the one matching the image is used. */
+    fun patch(io: ImageIo, options: Options, pkcs8Keys: List<ByteArray>, progress: Progress = Silent): Report {
         ImageFormat.requireRaw(io)
         progress.stage("Reading AVB footer")
         val avb = Avb(io)
@@ -263,7 +267,7 @@ object GsiPatcher {
 
         progress.stage("Writing hashtree and re-signing vbmeta")
         val oldRoot = avb.rootDigest.hex()
-        avb.writeBack(tree, newRoot, options.dropFec, pkcs8Key)
+        avb.writeBack(tree, newRoot, options.dropFec, pkcs8Keys)
 
         // Verify against the finished artifact rather than trusting that the
         // steps above returned without throwing.

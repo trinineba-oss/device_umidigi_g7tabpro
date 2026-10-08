@@ -172,6 +172,9 @@ class Avb(private val io: ImageIo) {
         1L -> "SHA256_RSA2048"
         2L -> "SHA256_RSA4096"
         3L -> "SHA256_RSA8192"
+        4L -> "SHA512_RSA2048"
+        5L -> "SHA512_RSA4096"
+        6L -> "SHA512_RSA8192"
         else -> "type" + t
     }
 
@@ -198,6 +201,20 @@ class Avb(private val io: ImageIo) {
         newRootDigest: ByteArray,
         dropFec: Boolean,
         pkcs8Key: ByteArray?
+    ) = writeBack(newTree, newRootDigest, dropFec, listOfNotNull(pkcs8Key))
+
+    /**
+     * As above, choosing from several keys. The re-signed vbmeta keeps its
+     * algorithm and its exact layout (the length-preserving edit depends on
+     * it), so the key must be the same size as the one the image was signed
+     * with: a 4096-bit image needs a 4096-bit key. GSIs ship signed with either,
+     * so callers pass one key per size and the matching one is used.
+     */
+    fun writeBack(
+        newTree: ByteArray,
+        newRootDigest: ByteArray,
+        dropFec: Boolean,
+        pkcs8Keys: List<ByteArray>
     ) {
         require(newTree.size.toLong() == treeSize) {
             "recomputed tree is " + newTree.size + " bytes but the descriptor says " + treeSize
@@ -216,10 +233,40 @@ class Avb(private val io: ImageIo) {
         }
 
         if (algorithmType != ALGORITHM_NONE) {
-            requireNotNull(pkcs8Key) {
+            require(pkcs8Keys.isNotEmpty()) {
                 "image is signed (" + algorithmName() + ") but no signing key was supplied"
             }
-            val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(pkcs8Key))
+            val (digestName, signatureName, wantBits) = when (algorithmType) {
+                1L -> Triple("SHA-256", "SHA256withRSA", 2048)
+                2L -> Triple("SHA-256", "SHA256withRSA", 4096)
+                3L -> Triple("SHA-256", "SHA256withRSA", 8192)
+                4L -> Triple("SHA-512", "SHA512withRSA", 2048)
+                5L -> Triple("SHA-512", "SHA512withRSA", 4096)
+                6L -> Triple("SHA-512", "SHA512withRSA", 8192)
+                else -> throw IllegalStateException(
+                    "unsupported vbmeta algorithm " + algorithmName() + "; cannot re-sign"
+                )
+            }
+            val embeddedBits = (pubKeySize - 8) / 2 * 8
+            require(embeddedBits == wantBits) {
+                "vbmeta says " + algorithmName() + " but embeds a " + embeddedBits + "-bit key"
+            }
+            val keys = pkcs8Keys.map {
+                KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(it))
+                    as java.security.interfaces.RSAPrivateKey
+            }
+            val fitting = keys.filter { it.modulus.bitLength() == wantBits }
+            require(fitting.isNotEmpty()) {
+                "this image is signed with a " + wantBits + "-bit key but the patcher holds only " +
+                    keys.map { it.modulus.bitLength() }.distinct().sorted().joinToString("/") +
+                    "-bit key(s), so it cannot be re-signed"
+            }
+            val embeddedAt0 = auxBlockStart + pubKeyOffset
+            val embedded0 = blob.copyOfRange(embeddedAt0, embeddedAt0 + pubKeySize)
+            // Prefer a key the image is already signed with (nothing to replace).
+            val key = fitting.firstOrNull {
+                AvbKey.encodePublicKey(it.modulus).contentEquals(embedded0)
+            } ?: fitting.first()
 
             // The signature is only meaningful against the public key embedded
             // in this same vbmeta. Third-party GSIs are often signed with the
@@ -227,7 +274,7 @@ class Avb(private val io: ImageIo) {
             // image whose signature cannot verify -- silently, because the
             // sizes still match. Replace the embedded key with ours, which is
             // exactly what `avbtool --key` does when it rebuilds a footer.
-            val ourModulus = (key as java.security.interfaces.RSAPrivateKey).modulus
+            val ourModulus = key.modulus
             val ourPub = AvbKey.encodePublicKey(ourModulus)
             val embeddedAt = auxBlockStart + pubKeyOffset
             val embedded = blob.copyOfRange(embeddedAt, embeddedAt + pubKeySize)
@@ -244,17 +291,17 @@ class Avb(private val io: ImageIo) {
             val header = blob.copyOfRange(0, 256)
             val aux = blob.copyOfRange(auxBlockStart, blob.size)
 
-            val md = MessageDigest.getInstance("SHA-256")
+            val md = MessageDigest.getInstance(digestName)
             md.update(header)
             md.update(aux)
             val digest = md.digest()
             require(digest.size == hashSize) { "hash size mismatch" }
             System.arraycopy(digest, 0, blob, authBlockStart + hashOffset, digest.size)
 
-            // SHA256withRSA performs exactly avbtool's operation: sha256 the
-            // payload, wrap it in PKCS#1 v1.5 padding with the sha256
+            // SHA256withRSA / SHA512withRSA perform exactly avbtool's operation:
+            // hash the payload, wrap it in PKCS#1 v1.5 padding with the matching
             // DigestInfo prefix, then raw-sign.
-            val signer = Signature.getInstance("SHA256withRSA")
+            val signer = Signature.getInstance(signatureName)
             signer.initSign(key)
             signer.update(header)
             signer.update(aux)
@@ -274,7 +321,7 @@ class Avb(private val io: ImageIo) {
                 val pub = KeyFactory.getInstance("RSA").generatePublic(
                     java.security.spec.RSAPublicKeySpec(crt.modulus, crt.publicExponent)
                 )
-                val v = Signature.getInstance("SHA256withRSA")
+                val v = Signature.getInstance(signatureName)
                 v.initVerify(pub)
                 v.update(header)
                 v.update(aux)

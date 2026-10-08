@@ -1013,7 +1013,10 @@ class MainActivity : Activity() {
 
         appendLog("")
         appendLog("== patching in place")
-        val key = resources.openRawResource(R.raw.testkey_rsa2048).use { it.readBytes() }
+        // One AOSP test key per RSA size: GSIs come signed with 2048- or
+        // 4096-bit keys and the re-signed vbmeta must keep the same size.
+        val keys = listOf(R.raw.testkey_rsa2048, R.raw.testkey_rsa4096, R.raw.testkey_rsa8192)
+            .map { id -> resources.openRawResource(id).use { it.readBytes() } }
 
         val pfd = contentResolver.openFileDescriptor(outUri, "rw")
             ?: throw IllegalStateException(
@@ -1046,7 +1049,7 @@ class MainActivity : Activity() {
                     vendorGenfscon = vendorPolicy.rules,
                     vendorSepolicyVersion = vendorPolicy.sepolicyVersion
                 ),
-                    key,
+                    keys,
                     object : GsiPatcher.Progress {
                         override fun stage(message: String) {
                             appendLog("   " + message)
