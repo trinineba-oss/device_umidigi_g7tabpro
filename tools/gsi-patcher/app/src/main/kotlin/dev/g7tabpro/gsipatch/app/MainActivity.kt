@@ -2,6 +2,7 @@ package dev.g7tabpro.gsipatch.app
 
 import android.app.Activity
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
@@ -102,6 +103,11 @@ class MainActivity : Activity() {
     private lateinit var progressBox: LinearLayout
     private lateinit var statusLine: TextView
     private lateinit var logScroll: ScrollView
+    private lateinit var screen: LinearLayout
+    private lateinit var controlsPane: LinearLayout
+    private lateinit var logPane: LinearLayout
+    /** True in landscape: the log sits beside the controls, uncapped. */
+    private var logBeside = false
     private lateinit var log: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -319,9 +325,13 @@ class MainActivity : Activity() {
         }
         logScroll = object : ScrollView(this) {
             override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+                // Capped below the controls in portrait so the buttons stay
+                // reachable; uncapped beside them in landscape, where the log
+                // has the full height to itself.
                 super.onMeasure(
                     widthSpec,
-                    MeasureSpec.makeMeasureSpec(dp(300), MeasureSpec.AT_MOST)
+                    if (logBeside) heightSpec
+                    else MeasureSpec.makeMeasureSpec(dp(300), MeasureSpec.AT_MOST)
                 )
             }
         }.apply {
@@ -329,12 +339,16 @@ class MainActivity : Activity() {
             addView(log)
         }
 
-        val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        screen.addView(controls, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        screen.addView(progressBox, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        screen.addView(divider())
-        screen.addView(logHeader, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        screen.addView(logScroll, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        // Two fixed panes; arrange() only decides how they sit relative to
+        // each other, so rotating never rebuilds a widget or loses state.
+        controlsPane = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        controlsPane.addView(controls, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        controlsPane.addView(progressBox, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        logPane = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        logPane.addView(logHeader, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        logPane.addView(logScroll)
+        screen = LinearLayout(this)
+        arrange(resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE)
         setContentView(screen)
 
         appendLog("device: TEE expects Android " + (device.teeRelease ?: "unknown") +
@@ -406,9 +420,40 @@ class MainActivity : Activity() {
         setPadding(0, 0, 0, dp(6))
     }
 
-    private fun divider(): View = View(this).apply {
+    private fun divider(vertical: Boolean = false): View = View(this).apply {
         setBackgroundColor(tint(0x30))
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, dp(1))
+        layoutParams = if (vertical) LinearLayout.LayoutParams(dp(1), MATCH_PARENT)
+        else LinearLayout.LayoutParams(MATCH_PARENT, dp(1))
+    }
+
+    /**
+     * Portrait: controls above, log below (capped). Landscape: controls on the
+     * left, log on the right at full height -- on a 1920x1200 tablet the
+     * stacked layout left the log a sliver under the buttons.
+     */
+    private fun arrange(landscape: Boolean) {
+        logBeside = landscape
+        screen.removeAllViews()
+        screen.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        if (landscape) {
+            screen.addView(controlsPane, LinearLayout.LayoutParams(0, MATCH_PARENT, 0.55f))
+            screen.addView(divider(vertical = true))
+            screen.addView(logPane, LinearLayout.LayoutParams(0, MATCH_PARENT, 0.45f))
+            logScroll.layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f)
+        } else {
+            screen.addView(controlsPane, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            screen.addView(divider())
+            screen.addView(logPane, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            logScroll.layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+        }
+        logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    // The manifest takes orientation changes itself (no recreation, so a
+    // running patch is never interrupted); re-lay the panes instead.
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        arrange(newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE)
     }
 
     /** The one-line summary of what the device wants and what the app can see. */
